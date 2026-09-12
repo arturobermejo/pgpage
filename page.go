@@ -30,6 +30,7 @@ func ReadPage(r io.ReaderAt, block BlockNumber) ([]byte, error) {
 	if err := ReadPageInto(r, block, page); err != nil {
 		return nil, err
 	}
+
 	return page, nil
 }
 
@@ -52,6 +53,7 @@ func ReadPageInto(r io.ReaderAt, block BlockNumber, buf []byte) error {
 		if n == 0 && errors.Is(err, io.EOF) {
 			return fmt.Errorf("pgpage: block %d at offset %d is past end of file: %w", block, offset, err)
 		}
+
 		return fmt.Errorf("pgpage: block %d at offset %d: read %d of %d bytes: %w", block, offset, n, PageSize, ErrPartialPage)
 	}
 

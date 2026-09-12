@@ -62,9 +62,11 @@ func TestReadPage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ReadPage(%d) returned error: %v", tt.block, err)
 			}
+
 			if len(page) != PageSize {
 				t.Fatalf("len(page) = %d, want %d", len(page), PageSize)
 			}
+
 			for i, b := range page {
 				if b != tt.want {
 					t.Fatalf("page[%d] = %#x, want %#x", i, b, tt.want)
@@ -105,9 +107,11 @@ func TestReadPagePastEndIsEOF(t *testing.T) {
 			if page != nil {
 				t.Errorf("page = %v, want nil", page)
 			}
+
 			if !errors.Is(err, io.EOF) {
 				t.Fatalf("errors.Is(err, io.EOF) = false, want true (err = %v)", err)
 			}
+
 			if errors.Is(err, ErrPartialPage) {
 				t.Errorf("past end of file must not report ErrPartialPage (err = %v)", err)
 			}
@@ -131,9 +135,11 @@ func TestReadPagePartialPage(t *testing.T) {
 			if page != nil {
 				t.Errorf("page = %v, want nil", page)
 			}
+
 			if !errors.Is(err, ErrPartialPage) {
 				t.Fatalf("errors.Is(err, ErrPartialPage) = false, want true (err = %v)", err)
 			}
+
 			if errors.Is(err, io.EOF) {
 				t.Errorf("a partial page must not report io.EOF (err = %v)", err)
 			}
@@ -148,9 +154,11 @@ func TestReadPageReaderError(t *testing.T) {
 	if page != nil {
 		t.Errorf("page = %v, want nil", page)
 	}
+
 	if !errors.Is(err, want) {
 		t.Fatalf("errors.Is(err, want) = false, want true (err = %v)", err)
 	}
+
 	if errors.Is(err, io.EOF) || errors.Is(err, ErrPartialPage) {
 		t.Errorf("an I/O failure must not be classified as EOF or partial page (err = %v)", err)
 	}
@@ -162,6 +170,7 @@ func TestReadPageErrorMentionsBlock(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
+
 	if got := err.Error(); !bytes.Contains([]byte(got), []byte("block 4")) {
 		t.Errorf("error %q does not mention the failing block", got)
 	}
@@ -176,6 +185,7 @@ func TestReadPageIntoReusesBuffer(t *testing.T) {
 		if err := ReadPageInto(r, block, buf); err != nil {
 			t.Fatalf("ReadPageInto(%d) returned error: %v", block, err)
 		}
+
 		want := byte(block + 1)
 		for i, b := range buf {
 			if b != want {
@@ -193,6 +203,7 @@ func TestReadPageIntoBufferSize(t *testing.T) {
 		if err == nil {
 			t.Fatalf("buffer of %d bytes: expected error, got nil", size)
 		}
+
 		if errors.Is(err, io.EOF) || errors.Is(err, ErrPartialPage) {
 			t.Errorf("buffer of %d bytes: must not be classified as EOF or partial page (err = %v)", size, err)
 		}
@@ -216,7 +227,9 @@ func TestReadPageIntoDoesNotAllocate(t *testing.T) {
 
 func BenchmarkReadPage(b *testing.B) {
 	r := bytes.NewReader(fakeFile(1))
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		if _, err := ReadPage(r, 0); err != nil {
 			b.Fatal(err)
@@ -227,7 +240,9 @@ func BenchmarkReadPage(b *testing.B) {
 func BenchmarkReadPageInto(b *testing.B) {
 	r := bytes.NewReader(fakeFile(1))
 	buf := make([]byte, PageSize)
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		if err := ReadPageInto(r, 0, buf); err != nil {
 			b.Fatal(err)
