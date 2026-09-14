@@ -53,3 +53,37 @@ func PageStatusOf(h PageHeader, err error) PageStatus {
 		return StatusOK
 	}
 }
+
+// PageSummary is the overview of one page shown when listing pages.
+type PageSummary struct {
+	// Header is the decoded page header. It is the zero value unless
+	// Status is StatusOK.
+	Header PageHeader
+	Status PageStatus
+	// Err explains why the page could not be decoded, and is nil when
+	// Status is StatusOK or StatusNew.
+	Err error
+}
+
+// SummarizePage decodes the header of page and classifies it. It never
+// fails: a page that cannot be decoded is reported through Status and Err.
+func SummarizePage(page []byte) PageSummary {
+	h, err := ParsePageHeader(page)
+
+	return PageSummary{
+		Header: h,
+		Status: PageStatusOf(h, err),
+		Err:    err,
+	}
+}
+
+// FreeSpacePercent returns the free space between pd_lower and pd_upper as
+// a percentage of the page size. ok is false unless Status is StatusOK,
+// because only a valid header says where the free space is.
+func (s PageSummary) FreeSpacePercent() (percent float64, ok bool) {
+	if s.Status != StatusOK {
+		return 0, false
+	}
+
+	return float64(s.Header.FreeSpace()) * 100 / PageSize, true
+}
