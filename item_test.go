@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"testing"
 )
@@ -344,7 +345,7 @@ var testItemHeader = PageHeader{
 }
 
 // makeItemPage serializes h and ids into a page, starting at line pointer 1.
-func makeItemPage(t *testing.T, h PageHeader, ids ...ItemID) []byte {
+func makeItemPage(t testing.TB, h PageHeader, ids ...ItemID) []byte {
 	t.Helper()
 
 	page := makePage(h)
@@ -359,4 +360,90 @@ func makeItemPage(t *testing.T, h PageHeader, ids ...ItemID) []byte {
 	}
 
 	return page
+}
+
+func FuzzItemIDs(f *testing.F) {
+	data, err := os.ReadFile(fixtureHeap)
+	if err != nil {
+		f.Fatal(err)
+	}
+
+	// Block 2 of the fixture has NORMAL, DEAD, REDIRECT and UNUSED items.
+	f.Add(data[2*PageSize:3*PageSize], uint16(744), uint16(2472), uint16(PageSize))
+	f.Add(makeItemPage(f, testItemHeader, makeItemID(8000, ItemNormal, 40)), testItemHeader.Lower, testItemHeader.Upper, testItemHeader.Special)
+	f.Add([]byte{}, uint16(0), uint16(0), uint16(0))
+
+	// data becomes the start of the page, including its header. The header
+	// is used twice: as fuzzed field values that need not match the page,
+	// and as decoded by ParsePageHeader when the bytes happen to be valid.
+	f.Fuzz(func(t *testing.T, data []byte, lower, upper, special uint16) {
+		page := make([]byte, PageSize)
+		copy(page, data)
+
+		checkItemInvariants(t, page, PageHeader{Lower: lower, Upper: upper, Special: special})
+
+		h, err := ParsePageHeader(page)
+		if err != nil {
+			return
+		}
+
+		items, err := ParseItemIDs(page, h, nil)
+		if err != nil {
+			t.Fatalf("ParseItemIDs failed on a valid header %+v: %v", h, err)
+		}
+
+		if len(items) != h.ItemCount() {
+			t.Fatalf("ParseItemIDs returned %d line pointers, header says %d", len(items), h.ItemCount())
+		}
+
+		checkItemInvariants(t, page, h)
+	})
+}
+
+// checkItemInvariants checks what callers rely on for any header h, valid or
+// not: reading line pointers never panics, and a line pointer that
+// CheckItemID accepts can be used without further checks.
+func checkItemInvariants(t *testing.T, page []byte, h PageHeader) {
+	t.Helper()
+
+	items, err := ParseItemIDs(page, h, nil)
+	if err != nil {
+		return
+	}
+
+	for i, id := range items {
+		n := OffsetNumber(i + 1)
+
+		if got, err := ItemIDAt(page, h, n); err != nil || got != id {
+			t.Fatalf("ItemIDAt(%d) = %#08x, %v; ParseItemIDs has %#08x", n, uint32(got), err, uint32(id))
+		}
+
+		if err := h.CheckItemID(n, id); err != nil {
+			// n exists, so any complaint must be about the line pointer.
+			if !errors.Is(err, ErrInvalidItemID) {
+				t.Fatalf("CheckItemID(%d) error does not wrap ErrInvalidItemID: %v", n, err)
+			}
+
+			continue
+		}
+
+		switch id.State() {
+		case ItemNormal:
+			if !id.HasStorage() {
+				t.Fatalf("CheckItemID accepted NORMAL line pointer %d without storage", n)
+			}
+		case ItemRedirect:
+			if target := OffsetNumber(id.Offset()); target < FirstOffsetNumber || int(target) > len(items) || target == n {
+				t.Fatalf("CheckItemID accepted line pointer %d redirecting to %d of %d", n, target, len(items))
+			}
+		case ItemUnused, ItemDead:
+		}
+
+		if id.State() != ItemUnused && id.HasStorage() {
+			start, end := int(id.Offset()), int(id.Offset())+int(id.Length())
+			if start%maxAlign != 0 || end > len(page) {
+				t.Fatalf("CheckItemID accepted line pointer %d at bytes %d-%d of a %d-byte page", n, start, end-1, len(page))
+			}
+		}
+	}
 }

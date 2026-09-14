@@ -184,8 +184,10 @@ func (h PageHeader) CheckItemID(n OffsetNumber, id ItemID) error {
 		return nil
 	}
 
+	// Checking PageSize too keeps accepted line pointers inside the page
+	// even when h was not decoded from it.
 	start, end := int(id.Offset()), int(id.Offset())+int(id.Length())
-	if start < int(h.Upper) || end > int(h.Special) {
+	if start < int(h.Upper) || end > int(h.Special) || end > PageSize {
 		return fmt.Errorf("pgpage: line pointer %d spans bytes %d-%d, outside tuple space %d-%d: %w",
 			n, start, end-1, h.Upper, h.Special-1, ErrInvalidItemID)
 	}
