@@ -1,6 +1,14 @@
 package pgpage
 
-import "testing"
+import (
+	"bytes"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestPageCount(t *testing.T) {
 	maxPages := int64(MaxBlockNumber) + 1
@@ -58,5 +66,126 @@ func TestPageCountInvalid(t *testing.T) {
 				t.Errorf("PageCount(%d) = %d, %d with error; want 0, 0", tt.size, pages, trailing)
 			}
 		})
+	}
+}
+
+// openRelation opens path and closes it when the test ends.
+func openRelation(t *testing.T, path string) *Relation {
+	t.Helper()
+
+	rel, err := OpenRelation(path)
+	if err != nil {
+		t.Fatalf("OpenRelation(%q) returned error: %v", path, err)
+	}
+
+	t.Cleanup(func() { rel.Close() })
+
+	return rel
+}
+
+func TestOpenRelation(t *testing.T) {
+	rel := openRelation(t, fixtureHeap)
+
+	if got := rel.Path(); got != fixtureHeap {
+		t.Errorf("Path() = %q, want %q", got, fixtureHeap)
+	}
+
+	if got, want := rel.Size(), int64(3*PageSize); got != want {
+		t.Errorf("Size() = %d, want %d", got, want)
+	}
+
+	if got := rel.PageCount(); got != 3 {
+		t.Errorf("PageCount() = %d, want 3", got)
+	}
+
+	if got := rel.TrailingBytes(); got != 0 {
+		t.Errorf("TrailingBytes() = %d, want 0", got)
+	}
+}
+
+// Pages read through a Relation must be the bytes of the file.
+func TestRelationReadPage(t *testing.T) {
+	data, err := os.ReadFile(fixtureHeap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rel := openRelation(t, fixtureHeap)
+
+	for block := range rel.PageCount() {
+		page, err := rel.ReadPage(block)
+		if err != nil {
+			t.Fatalf("ReadPage(%d) returned error: %v", block, err)
+		}
+
+		start := int64(block) * PageSize
+		if !bytes.Equal(page, data[start:start+PageSize]) {
+			t.Errorf("ReadPage(%d) does not match bytes %d-%d of the file", block, start, start+PageSize-1)
+		}
+	}
+
+	if _, err := rel.ReadPage(rel.PageCount()); !errors.Is(err, io.EOF) {
+		t.Errorf("ReadPage past the last page: errors.Is(err, io.EOF) = false, want true (err = %v)", err)
+	}
+}
+
+func TestOpenRelationPartialPage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "partial")
+	if err := os.WriteFile(path, make([]byte, 2*PageSize+PageSize/2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel := openRelation(t, path)
+
+	if got := rel.PageCount(); got != 2 {
+		t.Errorf("PageCount() = %d, want 2", got)
+	}
+
+	if got, want := rel.TrailingBytes(), int64(PageSize/2); got != want {
+		t.Errorf("TrailingBytes() = %d, want %d", got, want)
+	}
+
+	if _, err := rel.ReadPage(2); !errors.Is(err, ErrPartialPage) {
+		t.Errorf("ReadPage(2): errors.Is(err, ErrPartialPage) = false, want true (err = %v)", err)
+	}
+}
+
+func TestOpenRelationNotExist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing")
+
+	rel, err := OpenRelation(path)
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("errors.Is(err, fs.ErrNotExist) = false, want true (err = %v)", err)
+	}
+
+	if rel != nil {
+		t.Errorf("OpenRelation returned %+v with error, want nil", rel)
+	}
+}
+
+func TestOpenRelationDirectory(t *testing.T) {
+	rel, err := OpenRelation(t.TempDir())
+	if err == nil {
+		rel.Close()
+		t.Fatal("OpenRelation on a directory: expected error, got nil")
+	}
+
+	if rel != nil {
+		t.Errorf("OpenRelation returned %+v with error, want nil", rel)
+	}
+}
+
+func TestRelationReadPageAfterClose(t *testing.T) {
+	rel, err := OpenRelation(fixtureHeap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rel.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	if _, err := rel.ReadPage(0); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("errors.Is(err, os.ErrClosed) = false, want true (err = %v)", err)
 	}
 }
