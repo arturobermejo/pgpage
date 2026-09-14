@@ -2,7 +2,9 @@ package pgpage
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"slices"
 	"testing"
 )
 
@@ -103,43 +105,258 @@ func TestItemIDHasStorage(t *testing.T) {
 }
 
 // Every line pointer in the fixture must decode to what heap_page_items()
-// reports, and follow the lp_len conventions documented in itemid.h.
+// reports and be consistent with its page.
 func TestFixtureItemIDs(t *testing.T) {
 	rel := openRelation(t, fixtureHeap)
-	rows := readFixtureCSV(t, fixtureHeap+".items.csv")
 
-	pages := make(map[BlockNumber][]byte)
+	rowsByBlock := make(map[BlockNumber][]map[string]string)
 
-	for _, row := range rows {
+	for _, row := range readFixtureCSV(t, fixtureHeap+".items.csv") {
 		block := BlockNumber(parseInt(t, row["blkno"], 32))
-		lp := parseInt(t, row["lp"], 16)
+		rowsByBlock[block] = append(rowsByBlock[block], row)
+	}
 
-		page, ok := pages[block]
-		if !ok {
-			var err error
-			if page, err = rel.ReadPage(block); err != nil {
-				t.Fatalf("ReadPage(%d) returned error: %v", block, err)
+	var items []ItemID
+
+	for block := range rel.PageCount() {
+		page, err := rel.ReadPage(block)
+		if err != nil {
+			t.Fatalf("ReadPage(%d) returned error: %v", block, err)
+		}
+
+		h, err := ParsePageHeader(page)
+		if err != nil {
+			t.Fatalf("block %d: ParsePageHeader returned error: %v", block, err)
+		}
+
+		// Reusing items across pages is how callers avoid an allocation per page.
+		if items, err = ParseItemIDs(page, h, items); err != nil {
+			t.Fatalf("block %d: ParseItemIDs returned error: %v", block, err)
+		}
+
+		rows := rowsByBlock[block]
+		if len(items) != len(rows) {
+			t.Fatalf("block %d: ParseItemIDs returned %d line pointers, heap_page_items() has %d", block, len(items), len(rows))
+		}
+
+		for i, id := range items {
+			n := OffsetNumber(i + 1)
+			row := rows[i]
+
+			if lp := OffsetNumber(parseInt(t, row["lp"], 16)); lp != n {
+				t.Fatalf("block %d: row %d is line pointer %d, want %d", block, i, lp, n)
 			}
 
-			pages[block] = page
-		}
+			got := fmt.Sprintf("off=%d flags=%d len=%d", id.Offset(), uint8(id.State()), id.Length())
+			want := fmt.Sprintf("off=%s flags=%s len=%s", row["lp_off"], row["lp_flags"], row["lp_len"])
 
-		// Line pointers are numbered from 1 and start right after the header.
-		start := PageHeaderSize + (lp-1)*itemIDSize
-		id := ItemID(binary.LittleEndian.Uint32(page[start : start+itemIDSize]))
+			if got != want {
+				t.Errorf("block %d item %d: %s, want %s", block, n, got, want)
+			}
 
-		got := fmt.Sprintf("off=%d flags=%d len=%d", id.Offset(), uint8(id.State()), id.Length())
-		want := fmt.Sprintf("off=%s flags=%s len=%s", row["lp_off"], row["lp_flags"], row["lp_len"])
-
-		if got != want {
-			t.Errorf("block %d item %d: %s, want %s", block, lp, got, want)
-		}
-
-		switch state := id.State(); {
-		case state == ItemNormal && !id.HasStorage():
-			t.Errorf("block %d item %d: NORMAL without storage", block, lp)
-		case (state == ItemUnused || state == ItemRedirect) && id.HasStorage():
-			t.Errorf("block %d item %d: %v with storage", block, lp, state)
+			if err := h.CheckItemID(n, id); err != nil {
+				t.Errorf("block %d: CheckItemID returned error: %v", block, err)
+			}
 		}
 	}
+}
+
+func TestItemIDAt(t *testing.T) {
+	page := makeItemPage(t, testItemHeader, makeItemID(8152, ItemNormal, 35), makeItemID(0, ItemUnused, 0))
+
+	tests := []struct {
+		n    OffsetNumber
+		want ItemID
+	}{
+		{n: 1, want: makeItemID(8152, ItemNormal, 35)},
+		{n: 2, want: makeItemID(0, ItemUnused, 0)},
+	}
+
+	for _, tt := range tests {
+		got, err := ItemIDAt(page, testItemHeader, tt.n)
+		if err != nil {
+			t.Fatalf("ItemIDAt(%d) returned error: %v", tt.n, err)
+		}
+
+		if got != tt.want {
+			t.Errorf("ItemIDAt(%d) = %#08x, want %#08x", tt.n, uint32(got), uint32(tt.want))
+		}
+	}
+}
+
+func TestItemIDAtOutOfRange(t *testing.T) {
+	page := makeItemPage(t, testItemHeader)
+
+	// testItemHeader has 12 line pointers.
+	for _, n := range []OffsetNumber{0, 13, 0xFFFF} {
+		if _, err := ItemIDAt(page, testItemHeader, n); err == nil {
+			t.Errorf("ItemIDAt(%d): expected error, got nil", n)
+		}
+	}
+
+	if _, err := ItemIDAt(make([]byte, PageSize), PageHeader{}, FirstOffsetNumber); err == nil {
+		t.Error("ItemIDAt on a new page: expected error, got nil")
+	}
+}
+
+func TestParseItemIDs(t *testing.T) {
+	want := []ItemID{
+		makeItemID(8152, ItemNormal, 35),
+		makeItemID(0, ItemDead, 0),
+		makeItemID(1, ItemRedirect, 0),
+	}
+
+	h := testItemHeader
+	h.Lower = PageHeaderSize + uint16(len(want))*itemIDSize
+	page := makeItemPage(t, h, want...)
+
+	got, err := ParseItemIDs(page, h, nil)
+	if err != nil {
+		t.Fatalf("ParseItemIDs returned error: %v", err)
+	}
+
+	if !slices.Equal(got, want) {
+		t.Errorf("ParseItemIDs = %#08x, want %#08x", got, want)
+	}
+}
+
+func TestParseItemIDsNewPage(t *testing.T) {
+	got, err := ParseItemIDs(make([]byte, PageSize), PageHeader{}, nil)
+	if err != nil {
+		t.Fatalf("ParseItemIDs returned error: %v", err)
+	}
+
+	if len(got) != 0 {
+		t.Errorf("ParseItemIDs = %v, want no line pointers", got)
+	}
+}
+
+// A header that does not match the page must be an error, not a panic.
+func TestParseItemIDsBadInput(t *testing.T) {
+	tests := []struct {
+		name string
+		page []byte
+		h    PageHeader
+	}{
+		{name: "short page", page: make([]byte, PageSize-1), h: testItemHeader},
+		{name: "lower past page", page: make([]byte, PageSize), h: PageHeader{Lower: 0xFFFF, Upper: 0xFFFF}},
+		{name: "lower inside header", page: make([]byte, PageSize), h: PageHeader{Lower: 4, Upper: 8000}},
+		// (22-24)/4 truncates to 0, so a negative item count alone misses it.
+		{name: "lower just inside header", page: make([]byte, PageSize), h: PageHeader{Lower: 22, Upper: 8000}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseItemIDs(tt.page, tt.h, []ItemID{1, 2, 3})
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			if len(got) != 0 {
+				t.Errorf("ParseItemIDs = %v with error, want no line pointers", got)
+			}
+		})
+	}
+}
+
+// Reusing the previous result must not allocate.
+func TestParseItemIDsDoesNotAllocate(t *testing.T) {
+	page := makeItemPage(t, testItemHeader)
+	items := make([]ItemID, 0, testItemHeader.ItemCount())
+
+	allocs := testing.AllocsPerRun(100, func() {
+		var err error
+		if items, err = ParseItemIDs(page, testItemHeader, items); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("ParseItemIDs allocated %v times per call, want 0", allocs)
+	}
+}
+
+func TestCheckItemID(t *testing.T) {
+	// 12 line pointers, tuple space 8000-8191.
+	h := testItemHeader
+
+	tests := []struct {
+		name  string
+		n     OffsetNumber
+		id    ItemID
+		valid bool
+	}{
+		{name: "unused", n: 1, id: makeItemID(0, ItemUnused, 0), valid: true},
+		{name: "unused with garbage", n: 1, id: makeItemID(3, ItemUnused, 99), valid: true},
+		{name: "normal", n: 1, id: makeItemID(8000, ItemNormal, 40), valid: true},
+		{name: "normal ending at special", n: 1, id: makeItemID(8152, ItemNormal, 40), valid: true},
+		{name: "dead without storage", n: 1, id: makeItemID(0, ItemDead, 0), valid: true},
+		{name: "dead with storage", n: 1, id: makeItemID(8000, ItemDead, 40), valid: true},
+		{name: "redirect", n: 1, id: makeItemID(12, ItemRedirect, 0), valid: true},
+
+		{name: "normal without storage", n: 1, id: makeItemID(8000, ItemNormal, 0)},
+		{name: "normal before upper", n: 1, id: makeItemID(7992, ItemNormal, 40)},
+		{name: "normal past special", n: 1, id: makeItemID(8160, ItemNormal, 40)},
+		{name: "normal not aligned", n: 1, id: makeItemID(8004, ItemNormal, 40)},
+		{name: "dead past special", n: 1, id: makeItemID(8160, ItemDead, 40)},
+		{name: "redirect with storage", n: 1, id: makeItemID(2, ItemRedirect, 40)},
+		{name: "redirect to zero", n: 1, id: makeItemID(0, ItemRedirect, 0)},
+		{name: "redirect past last item", n: 1, id: makeItemID(13, ItemRedirect, 0)},
+		{name: "redirect to itself", n: 5, id: makeItemID(5, ItemRedirect, 0)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := h.CheckItemID(tt.n, tt.id)
+
+			if tt.valid && err != nil {
+				t.Errorf("CheckItemID returned error: %v", err)
+			}
+
+			if !tt.valid && !errors.Is(err, ErrInvalidItemID) {
+				t.Errorf("errors.Is(err, ErrInvalidItemID) = false, want true (err = %v)", err)
+			}
+		})
+	}
+}
+
+// Asking about a line pointer the page does not have is not corruption.
+func TestCheckItemIDOutOfRange(t *testing.T) {
+	for _, n := range []OffsetNumber{0, 13} {
+		err := testItemHeader.CheckItemID(n, makeItemID(8000, ItemNormal, 40))
+		if err == nil {
+			t.Errorf("CheckItemID(%d): expected error, got nil", n)
+		}
+
+		if errors.Is(err, ErrInvalidItemID) {
+			t.Errorf("CheckItemID(%d): must not wrap ErrInvalidItemID (err = %v)", n, err)
+		}
+	}
+}
+
+// testItemHeader describes a page with 12 line pointers and tuple space
+// from byte 8000 to the end of the page.
+var testItemHeader = PageHeader{
+	Lower:         PageHeaderSize + 12*itemIDSize,
+	Upper:         8000,
+	Special:       PageSize,
+	PageSize:      PageSize,
+	LayoutVersion: PageLayoutVersion,
+}
+
+// makeItemPage serializes h and ids into a page, starting at line pointer 1.
+func makeItemPage(t *testing.T, h PageHeader, ids ...ItemID) []byte {
+	t.Helper()
+
+	page := makePage(h)
+
+	for i, id := range ids {
+		start := PageHeaderSize + i*itemIDSize
+		binary.LittleEndian.PutUint32(page[start:start+itemIDSize], uint32(id))
+	}
+
+	if _, err := ParsePageHeader(page); err != nil {
+		t.Fatalf("makeItemPage built an invalid page: %v", err)
+	}
+
+	return page
 }
