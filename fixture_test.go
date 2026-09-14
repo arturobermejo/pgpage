@@ -86,8 +86,13 @@ func TestFixturePageHeaders(t *testing.T) {
 
 	rows := readFixtureCSV(t, fixtureHeap+".page_header.csv")
 
-	if got, want := info.Size(), int64(len(rows))*PageSize; got != want {
-		t.Fatalf("%s is %d bytes, want %d for %d pages", fixtureHeap, got, want, len(rows))
+	pages, trailing, err := PageCount(info.Size())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if int(pages) != len(rows) || trailing != 0 {
+		t.Fatalf("%s has %d pages and %d trailing bytes, want %d pages and none", fixtureHeap, pages, trailing, len(rows))
 	}
 
 	for _, row := range rows {
