@@ -389,7 +389,7 @@ var nullTupleHeader = HeapTupleHeader{
 
 // makeTuplePage builds a valid page whose line pointer 1 references tuple,
 // placed at the end of the page.
-func makeTuplePage(t *testing.T, tuple []byte) []byte {
+func makeTuplePage(t testing.TB, tuple []byte) []byte {
 	t.Helper()
 
 	offset := uint16(PageSize - (len(tuple)+maxAlign-1)/maxAlign*maxAlign)
@@ -461,9 +461,12 @@ func TestHeapTupleAtNoStorage(t *testing.T) {
 		makeItemID(0, ItemUnused, 0),
 		makeItemID(1, ItemRedirect, 0),
 		makeItemID(0, ItemDead, 0),
+		// Unused bits are not checked, so they can point anywhere: bytes
+		// 20000-24567 are far past the page. This used to panic.
+		makeItemID(20000, ItemUnused, 4568),
 	)
 
-	for n := OffsetNumber(1); n <= 3; n++ {
+	for n := OffsetNumber(1); n <= 4; n++ {
 		_, err := HeapTupleAt(page, testItemHeader, n)
 		if err == nil {
 			t.Errorf("HeapTupleAt(%d): expected error, got nil", n)
@@ -614,4 +617,35 @@ func TestFixtureHeapTuples(t *testing.T) {
 			}
 		}
 	}
+}
+
+// HeapTupleAt must never panic, whatever the line pointers and tuples of a
+// page with a valid header contain, and must only return bytes of the page.
+func FuzzHeapTupleAt(f *testing.F) {
+	fixture := makeTuplePage(f, makeTuple(fixtureTuple, 40))
+	f.Add(fixture[:PageHeaderSize+itemIDSize], fixture[8152:])
+
+	f.Fuzz(func(t *testing.T, head, tail []byte) {
+		// head overwrites the start of a valid page (header and line pointers)
+		// and tail its end (tuple data).
+		page := bytes.Clone(fixture)
+		copy(page, head)
+		copy(page[PageSize-min(len(tail), PageSize):], tail)
+
+		h, err := ParsePageHeader(page)
+		if err != nil {
+			return
+		}
+
+		for n := FirstOffsetNumber; int(n) <= h.ItemCount(); n++ {
+			tuple, err := HeapTupleAt(page, h, n)
+			if err != nil {
+				continue
+			}
+
+			if len(tuple.Data) > PageSize || cap(tuple.Data) != len(tuple.Data) {
+				t.Fatalf("item %d: Data of %d bytes, capacity %d", n, len(tuple.Data), cap(tuple.Data))
+			}
+		}
+	})
 }

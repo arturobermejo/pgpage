@@ -107,12 +107,15 @@ func HeapTupleAt(page []byte, h PageHeader, n OffsetNumber) (HeapTuple, error) {
 		return HeapTuple{}, err
 	}
 
-	if !id.HasStorage() {
+	// An unused line pointer has no tuple whatever its bits say. CheckItemID
+	// does not check its bits, so they must not be used as bounds.
+	if id.State() == ItemUnused || !id.HasStorage() {
 		return HeapTuple{}, fmt.Errorf("pgpage: line pointer %d is %v and has no tuple", n, id.State())
 	}
 
-	// CheckItemID guarantees these bytes are inside the page. The full slice
-	// expression caps the tuple, so appending to it cannot overwrite the page.
+	// For other states CheckItemID guarantees these bytes are inside the page.
+	// The full slice expression caps the tuple, so appending to it cannot
+	// overwrite the page.
 	start, end := int(id.Offset()), int(id.Offset())+int(id.Length())
 	tuple := page[start:end:end]
 
