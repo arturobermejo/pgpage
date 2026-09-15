@@ -100,3 +100,9 @@ func (r *Relation) TrailingBytes() int64 { return r.trailing }
 func (r *Relation) ReadPage(block BlockNumber) ([]byte, error) {
 	return ReadPage(r.file, block)
 }
+
+// ReadPageInto is like ReadPage but reads into buf, which must be PageSize
+// bytes long, so that scanning many pages can reuse one buffer.
+func (r *Relation) ReadPageInto(block BlockNumber, buf []byte) error {
+	return ReadPageInto(r.file, block, buf)
+}

@@ -34,6 +34,18 @@ func writePage(t *testing.T, page []byte) string {
 	return path
 }
 
+// invalidPage returns the invalid page example of the PRD: a complete header
+// whose pd_lower is past pd_upper.
+func invalidPage() []byte {
+	page := make([]byte, 8192)
+	page[12], page[13] = 0xF4, 0x01 // pd_lower = 500
+	page[14], page[15] = 0x64, 0x00 // pd_upper = 100
+	page[16], page[17] = 0x00, 0x20 // pd_special = 8192
+	page[18], page[19] = 0x04, 0x20 // page size 8192, layout version 4
+
+	return page
+}
+
 // Values from testdata/heap_small.page_header.csv.
 func TestInspect(t *testing.T) {
 	const want = `Block:          2
@@ -83,13 +95,6 @@ func TestInspectDefaultBlock(t *testing.T) {
 
 // Pages that cannot be decoded are reported, not treated as a failure.
 func TestInspectNotOK(t *testing.T) {
-	// The invalid page example of the PRD: pd_lower past pd_upper.
-	corrupt := make([]byte, 8192)
-	corrupt[12], corrupt[13] = 0xF4, 0x01 // pd_lower = 500
-	corrupt[14], corrupt[15] = 0x64, 0x00 // pd_upper = 100
-	corrupt[16], corrupt[17] = 0x00, 0x20 // pd_special = 8192
-	corrupt[18], corrupt[19] = 0x04, 0x20 // page size 8192, layout version 4
-
 	tests := []struct {
 		name string
 		page []byte
@@ -102,7 +107,7 @@ func TestInspectNotOK(t *testing.T) {
 		},
 		{
 			name: "invalid page",
-			page: corrupt,
+			page: invalidPage(),
 			want: "Block:  0\nStatus: INVALID\nError:  pgpage: invalid page boundaries: lower=500 upper=100 special=8192: invalid page header\n",
 		},
 	}

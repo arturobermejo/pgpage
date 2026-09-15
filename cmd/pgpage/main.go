@@ -3,6 +3,7 @@
 // Usage:
 //
 //	pgpage inspect <relation-file> [--block N]
+//	pgpage validate <relation-file>
 package main
 
 import (
@@ -27,6 +28,7 @@ const usage = `usage: pgpage <command> [arguments]
 
 commands:
   inspect <relation-file> [--block N]   print the header of one page
+  validate <relation-file>              check every page of a heap relation
 `
 
 func main() {
@@ -44,6 +46,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
+	case "validate":
+		return runValidate(args[1:], stdout, stderr)
 	case "help", "-h", "-help", "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK

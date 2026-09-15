@@ -189,3 +189,33 @@ func TestRelationReadPageAfterClose(t *testing.T) {
 		t.Errorf("errors.Is(err, os.ErrClosed) = false, want true (err = %v)", err)
 	}
 }
+
+func TestRelationReadPageInto(t *testing.T) {
+	data, err := os.ReadFile(fixtureHeap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rel := openRelation(t, fixtureHeap)
+	buf := make([]byte, PageSize)
+
+	for block := range rel.PageCount() {
+		if err := rel.ReadPageInto(block, buf); err != nil {
+			t.Fatalf("ReadPageInto(%d) returned error: %v", block, err)
+		}
+
+		start := int64(block) * PageSize
+		if !bytes.Equal(buf, data[start:start+PageSize]) {
+			t.Errorf("ReadPageInto(%d) does not match bytes %d-%d of the file", block, start, start+PageSize-1)
+		}
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := rel.ReadPageInto(0, buf); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("ReadPageInto allocated %v times per call, want 0", allocs)
+	}
+}
