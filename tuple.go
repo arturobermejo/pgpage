@@ -11,10 +11,6 @@ import (
 // to t_hoff.
 const HeapTupleHeaderSize = 23
 
-// heapNattsMask selects the number of attributes from t_infomask2; the
-// remaining bits are flags.
-const heapNattsMask = 0x07FF
-
 // ErrInvalidTupleHeader means a heap tuple header is inconsistent, which
 // indicates a corrupt tuple or a line pointer to something else.
 var ErrInvalidTupleHeader = errors.New("invalid heap tuple header")
@@ -28,15 +24,15 @@ type HeapTupleHeader struct {
 	// transaction, or t_xvac on tuples moved by pre-9.0 VACUUM FULL.
 	Field3    uint32
 	Ctid      ItemPointer // this tuple, or its newer version after an update
-	Infomask2 uint16      // number of attributes and HOT flags
-	Infomask  uint16      // visibility and layout flags
+	Infomask2 InfoMask2   // number of attributes and HOT flags
+	Infomask  InfoMask    // visibility and layout flags
 	Hoff      uint8       // offset to user data
 }
 
 // Natts returns the number of attributes stored in the tuple, which can be
 // lower than the table's after ALTER TABLE ADD COLUMN.
 func (h HeapTupleHeader) Natts() int {
-	return int(h.Infomask2 & heapNattsMask)
+	return h.Infomask2.Natts()
 }
 
 // ParseHeapTupleHeader decodes the header of tuple, the lp_len bytes a line
@@ -55,8 +51,8 @@ func ParseHeapTupleHeader(tuple []byte) (HeapTupleHeader, error) {
 		Xmax:      TransactionID(le.Uint32(tuple[4:8])),
 		Field3:    le.Uint32(tuple[8:12]),
 		Ctid:      decodeItemPointer(tuple[12:18]),
-		Infomask2: le.Uint16(tuple[18:20]),
-		Infomask:  le.Uint16(tuple[20:22]),
+		Infomask2: InfoMask2(le.Uint16(tuple[18:20])),
+		Infomask:  InfoMask(le.Uint16(tuple[20:22])),
 		Hoff:      tuple[22],
 	}
 

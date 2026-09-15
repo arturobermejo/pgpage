@@ -124,8 +124,8 @@ func makeTuple(h HeapTupleHeader, size int) []byte {
 	le.PutUint16(tuple[12:14], uint16(h.Ctid.Block>>16))
 	le.PutUint16(tuple[14:16], uint16(h.Ctid.Block))
 	le.PutUint16(tuple[16:18], uint16(h.Ctid.Offset))
-	le.PutUint16(tuple[18:20], h.Infomask2)
-	le.PutUint16(tuple[20:22], h.Infomask)
+	le.PutUint16(tuple[18:20], uint16(h.Infomask2))
+	le.PutUint16(tuple[20:22], uint16(h.Infomask))
 	tuple[22] = h.Hoff
 
 	return tuple
@@ -183,7 +183,7 @@ func TestParseHeapTupleHeaderRoundTrip(t *testing.T) {
 
 func TestHeapTupleHeaderNatts(t *testing.T) {
 	tests := []struct {
-		infomask2 uint16
+		infomask2 InfoMask2
 		want      int
 	}{
 		{infomask2: 0x0000, want: 0},
@@ -195,7 +195,7 @@ func TestHeapTupleHeaderNatts(t *testing.T) {
 
 	for _, tt := range tests {
 		if got := (HeapTupleHeader{Infomask2: tt.infomask2}).Natts(); got != tt.want {
-			t.Errorf("Natts() with t_infomask2 %#04x = %d, want %d", tt.infomask2, got, tt.want)
+			t.Errorf("Natts() with t_infomask2 %#04x = %d, want %d", uint16(tt.infomask2), got, tt.want)
 		}
 	}
 }
@@ -318,8 +318,8 @@ func TestFixtureTupleHeaders(t *testing.T) {
 				Xmax:      TransactionID(parseInt(t, row["t_xmax"], 64)),
 				Field3:    uint32(parseInt(t, row["t_field3"], 64)),
 				Ctid:      got.Ctid, // checked as text below
-				Infomask2: uint16(parseInt(t, row["t_infomask2"], 32)),
-				Infomask:  uint16(parseInt(t, row["t_infomask"], 32)),
+				Infomask2: InfoMask2(parseInt(t, row["t_infomask2"], 32)),
+				Infomask:  InfoMask(parseInt(t, row["t_infomask"], 32)),
 				Hoff:      uint8(parseInt(t, row["t_hoff"], 16)),
 			}
 
