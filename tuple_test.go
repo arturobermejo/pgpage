@@ -1,6 +1,7 @@
 package pgpage
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -167,7 +168,7 @@ func TestParseHeapTupleHeaderRoundTrip(t *testing.T) {
 		Field3:    7,
 		Ctid:      ItemPointer{Block: 70000, Offset: 4},
 		Infomask2: 0xC7FF,
-		Infomask:  0xFFFF,
+		Infomask:  0xFFFF &^ HeapHasNull, // 2047 attributes would need a longer null bitmap
 		Hoff:      32,
 	}
 
@@ -340,4 +341,277 @@ func TestFixtureTupleHeaders(t *testing.T) {
 	}
 
 	t.Logf("checked %d tuple headers", checked)
+}
+
+// The null bitmap must fit between the fixed header and t_hoff when
+// HEAP_HASNULL is set.
+func TestParseHeapTupleHeaderNullBitmap(t *testing.T) {
+	tests := []struct {
+		name     string
+		infomask InfoMask
+		natts    InfoMask2
+		hoff     uint8
+		valid    bool
+	}{
+		{name: "no nulls, many attributes", infomask: 0, natts: 1600, hoff: 24, valid: true},
+		{name: "8 attributes fit in byte 23", infomask: HeapHasNull, natts: 8, hoff: 24, valid: true},
+		{name: "9 attributes need 2 bytes", infomask: HeapHasNull, natts: 9, hoff: 24, valid: false},
+		{name: "9 attributes with hoff 32", infomask: HeapHasNull, natts: 9, hoff: 32, valid: true},
+		{name: "72 attributes fit before 32", infomask: HeapHasNull, natts: 72, hoff: 32, valid: true},
+		{name: "73 attributes do not", infomask: HeapHasNull, natts: 73, hoff: 32, valid: false},
+		{name: "no attributes", infomask: HeapHasNull, natts: 0, hoff: 24, valid: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := HeapTupleHeader{Infomask: tt.infomask, Infomask2: tt.natts, Hoff: tt.hoff}
+
+			_, err := ParseHeapTupleHeader(makeTuple(h, 64))
+			if tt.valid && err != nil {
+				t.Errorf("ParseHeapTupleHeader returned error: %v", err)
+			}
+
+			if !tt.valid && !errors.Is(err, ErrInvalidTupleHeader) {
+				t.Errorf("errors.Is(err, ErrInvalidTupleHeader) = false, want true (err = %v)", err)
+			}
+		})
+	}
+}
+
+// nullTupleHeader is row 4 of the hdr_demo table in the step 11 notes: nine
+// int columns where only the first is set, so t_bits is 10000000 00000000.
+var nullTupleHeader = HeapTupleHeader{
+	Xmin:      1,
+	Infomask2: 9,
+	Infomask:  HeapHasNull | HeapXmaxInvalid,
+	Hoff:      32,
+}
+
+// makeTuplePage builds a valid page whose line pointer 1 references tuple,
+// placed at the end of the page.
+func makeTuplePage(t *testing.T, tuple []byte) []byte {
+	t.Helper()
+
+	offset := uint16(PageSize - (len(tuple)+maxAlign-1)/maxAlign*maxAlign)
+	h := PageHeader{
+		Lower:         PageHeaderSize + itemIDSize,
+		Upper:         offset,
+		Special:       PageSize,
+		PageSize:      PageSize,
+		LayoutVersion: PageLayoutVersion,
+	}
+
+	page := makeItemPage(t, h, makeItemID(offset, ItemNormal, uint16(len(tuple))))
+	copy(page[offset:], tuple)
+
+	return page
+}
+
+func TestHeapTupleAtWithNulls(t *testing.T) {
+	tuple := makeTuple(nullTupleHeader, 36)
+	tuple[23] = 0x01                                 // only attribute 1 is not null
+	copy(tuple[32:], []byte{0x04, 0x00, 0x00, 0x00}) // a = 4
+
+	page := makeTuplePage(t, tuple)
+
+	h, err := ParsePageHeader(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := HeapTupleAt(page, h, 1)
+	if err != nil {
+		t.Fatalf("HeapTupleAt returned error: %v", err)
+	}
+
+	if got.Header != nullTupleHeader {
+		t.Errorf("Header = %+v, want %+v", got.Header, nullTupleHeader)
+	}
+
+	if want := []byte{0x01, 0x00}; !bytes.Equal(got.Bits, want) {
+		t.Errorf("Bits = % x, want % x", got.Bits, want)
+	}
+
+	if want := []byte{0x04, 0x00, 0x00, 0x00}; !bytes.Equal(got.Data, want) {
+		t.Errorf("Data = % x, want % x", got.Data, want)
+	}
+
+	for attnum, want := range map[int]bool{0: true, 1: false, 2: true, 8: true, 9: true, 10: true} {
+		if isNull := got.IsNull(attnum); isNull != want {
+			t.Errorf("IsNull(%d) = %v, want %v", attnum, isNull, want)
+		}
+	}
+}
+
+// Tuples without HEAP_HASNULL have no bitmap and no nulls among their
+// stored attributes.
+func TestHeapTupleIsNullWithoutBitmap(t *testing.T) {
+	tuple := HeapTuple{Header: HeapTupleHeader{Infomask2: 2, Hoff: 24}}
+
+	for attnum, want := range map[int]bool{0: true, 1: false, 2: false, 3: true} {
+		if got := tuple.IsNull(attnum); got != want {
+			t.Errorf("IsNull(%d) = %v, want %v", attnum, got, want)
+		}
+	}
+}
+
+// Line pointers without storage have no tuple, which is not corruption.
+func TestHeapTupleAtNoStorage(t *testing.T) {
+	page := makeItemPage(t, testItemHeader,
+		makeItemID(0, ItemUnused, 0),
+		makeItemID(1, ItemRedirect, 0),
+		makeItemID(0, ItemDead, 0),
+	)
+
+	for n := OffsetNumber(1); n <= 3; n++ {
+		_, err := HeapTupleAt(page, testItemHeader, n)
+		if err == nil {
+			t.Errorf("HeapTupleAt(%d): expected error, got nil", n)
+		}
+
+		if errors.Is(err, ErrInvalidItemID) || errors.Is(err, ErrInvalidTupleHeader) {
+			t.Errorf("HeapTupleAt(%d): must not report corruption (err = %v)", n, err)
+		}
+	}
+}
+
+func TestHeapTupleAtCorrupt(t *testing.T) {
+	tests := []struct {
+		name string
+		id   ItemID
+		want error
+	}{
+		{name: "line pointer past the page", id: makeItemID(8160, ItemNormal, 40), want: ErrInvalidItemID},
+		{name: "tuple shorter than its header", id: makeItemID(8184, ItemNormal, 8), want: ErrInvalidTupleHeader},
+		{name: "tuple with a zero header", id: makeItemID(8000, ItemNormal, 40), want: ErrInvalidTupleHeader},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := makeItemPage(t, testItemHeader, tt.id)
+
+			got, err := HeapTupleAt(page, testItemHeader, 1)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("errors.Is(err, %v) = false, want true (err = %v)", tt.want, err)
+			}
+
+			if got.Data != nil || got.Bits != nil || got.Header != (HeapTupleHeader{}) {
+				t.Errorf("HeapTupleAt = %+v with error, want zero value", got)
+			}
+		})
+	}
+}
+
+// Data shares memory with the page, but appending to it must not write into
+// the bytes that follow the tuple.
+func TestHeapTupleAtSharesPage(t *testing.T) {
+	// A 36-byte tuple is aligned to 40, so it spans bytes 8152-8187 and 4
+	// padding bytes follow it before the end of the page.
+	page := makeTuplePage(t, makeTuple(HeapTupleHeader{Hoff: 24}, 36))
+
+	h, err := ParsePageHeader(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tuple, err := HeapTupleAt(page, h, 1)
+	if err != nil {
+		t.Fatalf("HeapTupleAt returned error: %v", err)
+	}
+
+	// Data is bytes 8176-8187 of the page, not a copy of them.
+	page[8187] = 0xAB
+
+	if tuple.Data[len(tuple.Data)-1] != 0xAB {
+		t.Error("Data does not reflect a change to the page")
+	}
+
+	if got := cap(tuple.Data); got != len(tuple.Data) {
+		t.Errorf("cap(Data) = %d, want %d so appends cannot reach past the tuple", got, len(tuple.Data))
+	}
+
+	_ = append(tuple.Data, 0xCD)
+
+	if page[8188] != 0 {
+		t.Errorf("appending to Data wrote %#x into the padding after the tuple", page[8188])
+	}
+}
+
+func TestHeapTupleAtDoesNotAllocate(t *testing.T) {
+	tuple := makeTuple(nullTupleHeader, 36)
+	tuple[23] = 0x01
+	page := makeTuplePage(t, tuple)
+
+	h, err := ParsePageHeader(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if _, err := HeapTupleAt(page, h, 1); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("HeapTupleAt allocated %v times per call, want 0", allocs)
+	}
+}
+
+// Every line pointer of the fixture either yields its tuple or reports that
+// it has none, and row data matches the tuple lengths from heap_page_items().
+func TestFixtureHeapTuples(t *testing.T) {
+	rel := openRelation(t, fixtureHeap)
+
+	page, err := rel.ReadPage(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h, err := ParsePageHeader(page)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// (2,168) is the HOT update of row 380: id int4 = 380, name text = 'user 380 v2'.
+	got, err := HeapTupleAt(page, h, 168)
+	if err != nil {
+		t.Fatalf("HeapTupleAt(168) returned error: %v", err)
+	}
+
+	want := append([]byte{0x7c, 0x01, 0x00, 0x00, 0x19}, "user 380 v2"...)
+	if !bytes.Equal(got.Data, want) {
+		t.Errorf("Data = % x, want % x", got.Data, want)
+	}
+
+	if got.Bits != nil {
+		t.Errorf("Bits = % x, want nil", got.Bits)
+	}
+
+	for block := range rel.PageCount() {
+		if page, err = rel.ReadPage(block); err != nil {
+			t.Fatal(err)
+		}
+
+		if h, err = ParsePageHeader(page); err != nil {
+			t.Fatal(err)
+		}
+
+		for n := FirstOffsetNumber; int(n) <= h.ItemCount(); n++ {
+			id, err := ItemIDAt(page, h, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tuple, err := HeapTupleAt(page, h, n)
+
+			switch {
+			case !id.HasStorage() && err == nil:
+				t.Errorf("block %d item %d: %v without storage returned a tuple", block, n, id.State())
+			case id.HasStorage() && err != nil:
+				t.Errorf("block %d item %d: HeapTupleAt returned error: %v", block, n, err)
+			case id.HasStorage() && len(tuple.Data) != int(id.Length())-int(tuple.Header.Hoff):
+				t.Errorf("block %d item %d: %d data bytes, want %d", block, n, len(tuple.Data), int(id.Length())-int(tuple.Header.Hoff))
+			}
+		}
+	}
 }

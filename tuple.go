@@ -62,7 +62,90 @@ func ParseHeapTupleHeader(tuple []byte) (HeapTupleHeader, error) {
 			h.Hoff, HeapTupleHeaderSize, len(tuple), ErrInvalidTupleHeader)
 	}
 
+	if h.Infomask.Has(HeapHasNull) {
+		if end := HeapTupleHeaderSize + nullBitmapSize(h.Natts()); end > int(h.Hoff) {
+			return HeapTupleHeader{}, fmt.Errorf("pgpage: null bitmap for %d attributes ends at byte %d, past t_hoff %d: %w",
+				h.Natts(), end, h.Hoff, ErrInvalidTupleHeader)
+		}
+	}
+
 	return h, nil
+}
+
+// nullBitmapSize returns the bytes of null bitmap needed for natts
+// attributes, one bit each.
+func nullBitmapSize(natts int) int {
+	return (natts + 7) / 8
+}
+
+// HeapTuple is a heap tuple read from a page. Bits and Data are sub-slices of
+// the page: they are only valid while its bytes are, and change if the page
+// buffer is reused, for example by ReadPageInto.
+type HeapTuple struct {
+	Header HeapTupleHeader
+	// Bits is the null bitmap (t_bits), with one bit per attribute that is 0
+	// when the attribute is null. It is nil unless HeapHasNull is set.
+	Bits []byte
+	// Data holds the attribute values, from t_hoff to the end of the tuple.
+	// Decoding them requires the table's schema.
+	Data []byte
+}
+
+// HeapTupleAt returns the tuple referenced by line pointer n of page, whose
+// header is h.
+//
+// It returns an error if the line pointer has no storage, as for UNUSED,
+// REDIRECT and pruned DEAD line pointers. Errors caused by a corrupt line
+// pointer or tuple header wrap ErrInvalidItemID or ErrInvalidTupleHeader.
+func HeapTupleAt(page []byte, h PageHeader, n OffsetNumber) (HeapTuple, error) {
+	id, err := ItemIDAt(page, h, n)
+	if err != nil {
+		return HeapTuple{}, err
+	}
+
+	if err = h.CheckItemID(n, id); err != nil {
+		return HeapTuple{}, err
+	}
+
+	if !id.HasStorage() {
+		return HeapTuple{}, fmt.Errorf("pgpage: line pointer %d is %v and has no tuple", n, id.State())
+	}
+
+	// CheckItemID guarantees these bytes are inside the page. The full slice
+	// expression caps the tuple, so appending to it cannot overwrite the page.
+	start, end := int(id.Offset()), int(id.Offset())+int(id.Length())
+	tuple := page[start:end:end]
+
+	header, err := ParseHeapTupleHeader(tuple)
+	if err != nil {
+		return HeapTuple{}, fmt.Errorf("pgpage: line pointer %d: %w", n, err)
+	}
+
+	t := HeapTuple{Header: header, Data: tuple[header.Hoff:]}
+	if header.Infomask.Has(HeapHasNull) {
+		bitsEnd := HeapTupleHeaderSize + nullBitmapSize(header.Natts())
+		t.Bits = tuple[HeapTupleHeaderSize:bitsEnd:bitsEnd]
+	}
+
+	return t, nil
+}
+
+// IsNull reports whether attribute attnum, numbered from 1, has no value
+// stored in the tuple: it is null in the bitmap, or the tuple has fewer than
+// attnum attributes. Such a missing attribute reads as null or as its
+// default, which only the table's catalog entry can tell.
+func (t HeapTuple) IsNull(attnum int) bool {
+	if attnum < 1 || attnum > t.Header.Natts() {
+		return true
+	}
+
+	if t.Bits == nil {
+		return false
+	}
+
+	i := attnum - 1
+
+	return t.Bits[i/8]&(1<<(i%8)) == 0
 }
 
 // itemPointerSize is the size of ItemPointerData on disk.
