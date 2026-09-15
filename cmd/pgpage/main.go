@@ -3,14 +3,18 @@
 // Usage:
 //
 //	pgpage inspect <relation-file> [--block N]
+//	pgpage items <relation-file> [--block N]
 //	pgpage validate <relation-file>
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/arturobermejo/pgpage"
 )
 
 // Exit codes.
@@ -24,6 +28,7 @@ const usage = `usage: pgpage <command> [arguments]
 
 commands:
   inspect <relation-file> [--block N]   print the header of one page
+  items <relation-file> [--block N]     list the line pointers and tuples of one page
   validate <relation-file>              check every page of a heap relation
 `
 
@@ -42,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
+	case "items":
+		return runItems(args[1:], stdout, stderr)
 	case "validate":
 		return runValidate(args[1:], stdout, stderr)
 	case "help", "-h", "-help", "--help":
@@ -90,4 +97,57 @@ func usageError(fs *flag.FlagSet, format string, args ...any) error {
 	fs.Usage()
 
 	return err
+}
+
+// newFlagSet returns the flag set of a command, which reports errors and the
+// usage line to stderr instead of exiting.
+func newFlagSet(name, usageLine string, stderr io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, usageLine)
+		fs.PrintDefaults()
+	}
+
+	return fs
+}
+
+// readBlockArg parses "<relation-file> [--block N]" and reads that page. It
+// reports every problem to stderr itself: when it returns a nil page, the
+// command must exit with code.
+func readBlockArg(fs *flag.FlagSet, args []string, stderr io.Writer) (block pgpage.BlockNumber, page []byte, code int) {
+	n := fs.Uint("block", 0, "block `number` of the page to read")
+
+	path, err := parseArgs(fs, args)
+	if errors.Is(err, flag.ErrHelp) {
+		return 0, nil, exitOK
+	}
+
+	if err != nil {
+		return 0, nil, exitUsage // parseArgs already reported it
+	}
+
+	rel, err := pgpage.OpenRelation(path)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 0, nil, exitError
+	}
+	defer rel.Close()
+
+	// Compare before converting: a huge --block must not wrap around to a
+	// valid block number.
+	if *n >= uint(rel.PageCount()) {
+		fmt.Fprintf(stderr, "pgpage: block %d is out of range: %s has %d pages\n", *n, path, rel.PageCount())
+		return 0, nil, exitError
+	}
+
+	block = pgpage.BlockNumber(*n)
+
+	page, err = rel.ReadPage(block)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 0, nil, exitError
+	}
+
+	return block, page, exitOK
 }

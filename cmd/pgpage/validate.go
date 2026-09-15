@@ -12,12 +12,7 @@ import (
 // runValidate implements "pgpage validate". It exits with exitError if the
 // relation has any problem.
 func runValidate(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pgpage validate <relation-file>")
-		fs.PrintDefaults()
-	}
+	fs := newFlagSet("validate", "usage: pgpage validate <relation-file>", stderr)
 
 	path, err := parseArgs(fs, args)
 	if errors.Is(err, flag.ErrHelp) {

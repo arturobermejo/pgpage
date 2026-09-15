@@ -1,8 +1,6 @@
 package main
 
 import (
-	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"text/tabwriter"
@@ -12,45 +10,14 @@ import (
 
 // runInspect implements "pgpage inspect".
 func runInspect(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pgpage inspect <relation-file> [--block N]")
-		fs.PrintDefaults()
+	fs := newFlagSet("inspect", "usage: pgpage inspect <relation-file> [--block N]", stderr)
+
+	block, page, code := readBlockArg(fs, args, stderr)
+	if page == nil {
+		return code
 	}
 
-	block := fs.Uint("block", 0, "block `number` of the page to inspect")
-
-	path, err := parseArgs(fs, args)
-	if errors.Is(err, flag.ErrHelp) {
-		return exitOK
-	}
-
-	if err != nil {
-		return exitUsage // parseArgs already reported it
-	}
-
-	rel, err := pgpage.OpenRelation(path)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitError
-	}
-	defer rel.Close()
-
-	// Compare before converting: a huge --block must not wrap around to a
-	// valid block number.
-	if *block >= uint(rel.PageCount()) {
-		fmt.Fprintf(stderr, "pgpage: block %d is out of range: %s has %d pages\n", *block, path, rel.PageCount())
-		return exitError
-	}
-
-	page, err := rel.ReadPage(pgpage.BlockNumber(*block))
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return exitError
-	}
-
-	printInspect(stdout, pgpage.BlockNumber(*block), pgpage.SummarizePage(page))
+	printInspect(stdout, block, pgpage.SummarizePage(page))
 
 	return exitOK
 }
