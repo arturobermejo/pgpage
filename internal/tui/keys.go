@@ -18,6 +18,7 @@ type keyMap struct {
 	End      key.Binding
 
 	GoTo key.Binding
+	Open key.Binding
 	Help key.Binding
 	Quit key.Binding
 	Back key.Binding
@@ -26,14 +27,14 @@ type keyMap struct {
 // ShortHelp returns the bindings of the one-line help at the bottom of the
 // screen: the few that a user needs to get anywhere.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.GoTo, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Open, k.GoTo, k.Help, k.Quit}
 }
 
 // FullHelp returns the bindings of the help screen, in columns.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown},
-		{k.Home, k.End, k.GoTo},
+		{k.Home, k.End, k.GoTo, k.Open},
 		{k.Help, k.Back, k.Quit},
 	}
 }
@@ -69,16 +70,46 @@ var keys = keyMap{
 		key.WithKeys("g"),
 		key.WithHelp("g", "go to block"),
 	),
+	Open: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("↵", "line pointers"),
+	),
 	Help: key.NewBinding(
 		key.WithKeys("?", "h"),
 		key.WithHelp("?", "keys"),
 	),
 	Back: key.NewBinding(
 		key.WithKeys("esc"),
-		key.WithHelp("Esc", "close the help"),
+		key.WithHelp("Esc", "back"),
 	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
 	),
+}
+
+// itemKeys are the bindings of the line pointer view. The keys are the same
+// as in the page view, so moving works the same everywhere; what changes is
+// what they move, and so how the help describes them. Keys that do nothing
+// in this view are disabled, which also hides them from the help.
+var itemKeys = keyMap{
+	Up:       describe(keys.Up, "previous item"),
+	Down:     describe(keys.Down, "next item"),
+	PageUp:   keys.PageUp,
+	PageDown: keys.PageDown,
+	Home:     describe(keys.Home, "first item"),
+	End:      describe(keys.End, "last item"),
+	GoTo:     describe(keys.GoTo, "go to line pointer"),
+	Open:     key.NewBinding(key.WithDisabled()),
+	Help:     keys.Help,
+	Back:     describe(keys.Back, "page view"),
+	Quit:     keys.Quit,
+}
+
+// describe returns binding with the same keys and another description.
+func describe(binding key.Binding, desc string) key.Binding {
+	return key.NewBinding(
+		key.WithKeys(binding.Keys()...),
+		key.WithHelp(binding.Help().Key, desc),
+	)
 }

@@ -52,19 +52,50 @@ func glyph(kind pgpage.RegionKind) string {
 	return cellGlyph
 }
 
-// swatch returns n cells of a region, as the map draws them.
-func swatch(kind pgpage.RegionKind, n int) string {
+// highlightGlyph draws the highlighted cells when there is no color: a shade
+// no region uses.
+const highlightGlyph = "▒"
+
+// highlight is a range of bytes the map paints over its regions, such as the
+// tuple of the selected line pointer. The zero value highlights nothing.
+type highlight struct {
+	start, end int    // bytes, end excluded
+	label      string // what the legend calls the range
+}
+
+// covers reports whether the highlight shares any byte with [start, end).
+func (h highlight) covers(start, end int) bool {
+	return h.start < h.end && start < h.end && h.start < end
+}
+
+// paint is what one cell of the map is drawn as: its region, and whether it
+// is highlighted.
+type paint struct {
+	kind        pgpage.RegionKind
+	highlighted bool
+}
+
+// swatch returns n cells painted the same way, as the map draws them.
+func swatch(p paint, n int) string {
 	if lipgloss.ColorProfile() == termenv.Ascii {
 		// Without color the glyphs alone tell the regions apart, and an
 		// underline would only add noise to a plain text capture.
-		return strings.Repeat(regionGlyph[kind], n)
+		if p.highlighted {
+			return strings.Repeat(highlightGlyph, n)
+		}
+
+		return strings.Repeat(regionGlyph[p.kind], n)
+	}
+
+	colors := regionPalette[p.kind]
+	if p.highlighted {
+		colors = highlightColors
 	}
 
 	// termenv, the library under Lip Gloss, styles the whole run with a
 	// single escape sequence. Lip Gloss would underline it one character at
 	// a time, which is 64 sequences for a row of a single region.
 	profile := lipgloss.ColorProfile()
-	colors := regionPalette[kind]
 
 	return profile.String(strings.Repeat(cellGlyph, n)).
 		Foreground(profile.Color(string(colors.line))).
@@ -85,6 +116,12 @@ func swatch(kind pgpage.RegionKind, n int) string {
 // That is how it looks without color; with color every cell is a cellGlyph
 // over the background of its region.
 func pageMap(summary pgpage.PageSummary, cached bool, width int) string {
+	return pageMapWith(summary, cached, width, highlight{})
+}
+
+// pageMapWith is pageMap with a range of bytes highlighted, and named in the
+// legend.
+func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highlight) string {
 	if !cached {
 		return moreStyle.Render("reading…")
 	}
@@ -106,21 +143,26 @@ func pageMap(summary pgpage.PageSummary, cached bool, width int) string {
 
 	for row := range mapRows {
 		b.WriteString("\n" + offsetStyle.Render(fmt.Sprintf("0x%04X ", row*bytesPerRow)))
-		b.WriteString(mapRow(regions, row, cells))
+		b.WriteString(mapRow(regions, row, cells, hl))
 	}
 
 	b.WriteString("\n\n" + legend(regions, width))
+
+	if hl.start < hl.end {
+		b.WriteString("\n" + swatch(paint{highlighted: true}, 1) + " " + valueStyle.Render(hl.label) + " " +
+			fieldStyle.Render(fmt.Sprintf("bytes %d-%d · %d B", hl.start, hl.end-1, hl.end-hl.start)))
+	}
 
 	return b.String()
 }
 
 // mapRow draws one row of the grid: cells cells covering the bytesPerRow
-// bytes that start at row*bytesPerRow.
-func mapRow(regions []pgpage.Region, row, cells int) string {
+// bytes that start at row*bytesPerRow, with the cells hl covers highlighted.
+func mapRow(regions []pgpage.Region, row, cells int, hl highlight) string {
 	var (
-		b    strings.Builder
-		kind pgpage.RegionKind
-		run  int
+		b   strings.Builder
+		cur paint
+		run int
 	)
 
 	base := row * bytesPerRow
@@ -129,23 +171,26 @@ func mapRow(regions []pgpage.Region, row, cells int) string {
 		// Cell boundaries are computed from the cell index, not accumulated,
 		// so rounding cannot drift along the row.
 		start := base + i*bytesPerRow/cells
-		end := base + (i+1)*bytesPerRow/cells
+		end := max(base+(i+1)*bytesPerRow/cells, start+1)
 
-		cell := cellRegion(regions, start, max(end, start+1))
+		cell := paint{
+			kind:        cellRegion(regions, start, end),
+			highlighted: hl.covers(start, end),
+		}
 
-		// Consecutive cells of one region are styled together: one escape
+		// Consecutive cells painted alike are styled together: one escape
 		// sequence for the run instead of one per cell.
-		if run > 0 && cell != kind {
-			b.WriteString(swatch(kind, run))
+		if run > 0 && cell != cur {
+			b.WriteString(swatch(cur, run))
 
 			run = 0
 		}
 
-		kind = cell
+		cur = cell
 		run++
 	}
 
-	b.WriteString(swatch(kind, run))
+	b.WriteString(swatch(cur, run))
 
 	return b.String()
 }

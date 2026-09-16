@@ -124,30 +124,38 @@ func lastVisible(pages, top pgpage.BlockNumber, rows int) pgpage.BlockNumber {
 }
 
 // scrollTo returns the first block the navigator must show so that selected
-// is inside a window of rows blocks. The list stays still while the
-// selection is visible, and follows it by the least amount when it is not.
+// is inside a window of rows blocks.
 func scrollTo(pages, top, selected pgpage.BlockNumber, rows int) pgpage.BlockNumber {
-	if rows < 1 {
-		rows = 1
-	}
+	return windowTop(pages, top, selected, rows)
+}
+
+// windowTop returns the first row a window of rows rows must start at so
+// that selected is inside it, in a list of count rows. The same rule serves
+// the pages of a relation and the line pointers of a page.
+//
+// The window stays still while the selection is visible, and follows it by
+// the least amount when it is not. The arithmetic is done in uint64: block
+// numbers reach 2^32, and top+rows must not wrap around.
+func windowTop[T ~int | ~uint32](count, top, selected T, rows int) T {
+	c, t, s, r := uint64(count), uint64(top), uint64(selected), uint64(max(rows, 1))
 
 	switch {
-	case selected < top:
-		top = selected // moved up, past the top of the window
+	case s < t:
+		t = s // moved up, past the top of the window
 
-	case uint64(selected) >= uint64(top)+uint64(rows):
-		top = selected - pgpage.BlockNumber(rows) + 1 // moved down, past the bottom
+	case s >= t+r:
+		t = s - r + 1 // moved down, past the bottom
 	}
 
-	// Leave no empty rows at the bottom while there are blocks above the
-	// window that could fill them, which is what a window made taller does.
-	if uint64(top)+uint64(rows) > uint64(pages) {
-		if uint64(rows) >= uint64(pages) {
+	// Leave no empty rows at the bottom while there are rows above the window
+	// that could fill them, which is what a window made taller does.
+	if t+r > c {
+		if r >= c {
 			return 0
 		}
 
-		return pages - pgpage.BlockNumber(rows)
+		t = c - r
 	}
 
-	return top
+	return T(t)
 }

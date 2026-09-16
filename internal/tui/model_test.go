@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -243,7 +244,7 @@ func press(t *testing.T, m Model, keys ...string) Model {
 }
 
 // The keys of the navigator move the selection and scroll the list. With a
-// height of 16 the window holds 10 rows.
+// height of 17 the window holds 10 rows.
 func TestModelNavigation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -266,7 +267,7 @@ func TestModelNavigation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New(openRelation(t, 20))
-			m.width, m.height = 80, 16
+			m.width, m.height = 80, 17
 
 			m = press(t, m, tt.keys...)
 
@@ -294,7 +295,7 @@ func repeat(name string, n int) []string {
 // The screen shows the selection moving, not just the model.
 func TestModelNavigationView(t *testing.T) {
 	m := New(openRelation(t, 20))
-	m.width, m.height = 80, 16
+	m.width, m.height = 80, 17
 
 	m.width = 200 // wide enough for the long path of a temporary directory
 
@@ -313,7 +314,7 @@ func TestModelNavigationView(t *testing.T) {
 // not take the selection anywhere.
 func TestModelNavigationEmptyRelation(t *testing.T) {
 	m := New(openRelation(t, 0))
-	m.width, m.height = 80, 16
+	m.width, m.height = 80, 17
 
 	m = press(t, m, "down", "end", "pgdown")
 
@@ -326,11 +327,11 @@ func TestModelNavigationEmptyRelation(t *testing.T) {
 // selection on screen.
 func TestModelResizeScrolls(t *testing.T) {
 	m := New(openRelation(t, 20))
-	m.width, m.height = 80, 16
+	m.width, m.height = 80, 17
 
 	m = press(t, m, "end") // block 19, window 10..19
 
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 9}) // 3 rows
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10}) // 3 rows
 	m, _ = next.(Model)
 
 	if m.visibleRows() != 3 {
@@ -346,7 +347,7 @@ func TestModelResizeScrolls(t *testing.T) {
 // shows them.
 func TestModelSummariesMsg(t *testing.T) {
 	m := New(openFixture(t))
-	m.width, m.height = 80, 16
+	m.width, m.height = 80, 17
 
 	if strings.Contains(m.View(), "items") {
 		t.Fatalf("the list shows summaries before reading any page:\n%s", m.View())
@@ -376,7 +377,7 @@ func TestModelSummariesMsg(t *testing.T) {
 // nothing, which is what keeps navigation instant.
 func TestModelRefreshUsesTheCache(t *testing.T) {
 	m := New(openFixture(t))
-	m.width, m.height = 80, 16
+	m.width, m.height = 80, 17
 
 	next, _ := m.Update(run(t, m.Init()))
 	m, _ = next.(Model)
@@ -852,5 +853,214 @@ func TestModelScreenMargin(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// The navigator's last line, the count of pages below the window, fits in
+// its panel: the rows are counted after every other line on screen.
+func TestModelPageListMoreLineFits(t *testing.T) {
+	m := New(openRelation(t, 20))
+	m.width, m.height = 80, 17
+
+	if view := m.View(); !strings.Contains(view, "↓ 10 more") {
+		t.Errorf("the count of hidden pages is cut off:\n%s", view)
+	}
+}
+
+// openItemsView opens the line pointer view on block of the fixture, with
+// the line pointers already read, as the program does after pressing Enter.
+func openItemsView(t *testing.T, block pgpage.BlockNumber, width, height int) Model {
+	t.Helper()
+
+	m := press(t, loaded(t, width, height), "g", fmt.Sprint(block), "enter")
+
+	next, cmd := m.Update(keyMsg("enter"))
+	m, _ = next.(Model)
+
+	if m.current() != viewItems {
+		t.Fatalf("enter on block %d did not open the line pointer view", block)
+	}
+
+	next, _ = m.Update(run(t, cmd))
+	m, _ = next.(Model)
+
+	return m
+}
+
+// Enter on a valid page opens its line pointers, read by a command.
+func TestModelOpenItems(t *testing.T) {
+	m := loaded(t, 150, 30)
+
+	next, cmd := m.Update(keyMsg("enter"))
+	m, _ = next.(Model)
+
+	if m.current() != viewItems || len(m.views) != 2 {
+		t.Fatalf("views = %v, want the line pointer view on top of the pages", m.views)
+	}
+
+	if !strings.Contains(m.View(), "reading…") {
+		t.Errorf("the view does not say the line pointers are being read:\n%s", m.View())
+	}
+
+	msg, ok := run(t, cmd).(itemsMsg)
+	if !ok || msg.block != 0 {
+		t.Fatalf("enter did not ask for the line pointers of block 0: %#v", msg)
+	}
+
+	next, _ = m.Update(msg)
+	m, _ = next.(Model)
+
+	view := m.View()
+
+	for _, want := range []string{"LINE POINTERS · 185", "LINE POINTER #1", "PAGE 0 — 8192 BYTES", "ITEMID WORD", "previous item"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+}
+
+// A page with no valid header has no line pointers to open.
+func TestModelOpenItemsOnBrokenPage(t *testing.T) {
+	m := New(openMixed(t))
+	m.width, m.height = 150, 30
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	for _, keys := range [][]string{{"down"}, {"end"}} { // the new page, the invalid one
+		page := press(t, m, keys...)
+
+		next, cmd := page.Update(keyMsg("enter"))
+		after, _ := next.(Model)
+
+		if after.current() != viewPages || cmd != nil {
+			t.Errorf("enter on block %d opened a view or read the page", page.block)
+		}
+	}
+}
+
+// In the line pointer view the keys move the selected line pointer, not the
+// selected page, and Esc goes back to the pages where they were.
+func TestModelItemsNavigation(t *testing.T) {
+	m := openItemsView(t, 2, 150, 30)
+
+	m = press(t, m, "down", "down", "down")
+
+	if m.items.selected != 3 || m.block != 2 {
+		t.Errorf("selected item index %d on block %d, want 3 on block 2", m.items.selected, m.block)
+	}
+
+	if m = press(t, m, "end"); m.items.selected != 179 {
+		t.Errorf("end selected index %d, want 179, the last of 180", m.items.selected)
+	}
+
+	if m = press(t, m, "home", "up"); m.items.selected != 0 {
+		t.Errorf("up from the first line pointer selected index %d, want 0", m.items.selected)
+	}
+
+	back := press(t, m, "esc")
+
+	if back.current() != viewPages || back.block != 2 {
+		t.Errorf("esc left view %v on block %d, want the pages on block 2", back.current(), back.block)
+	}
+
+	if _, cmd := back.Update(keyMsg("esc")); !isQuit(cmd) {
+		t.Error("esc on the pages did not quit")
+	}
+}
+
+// Going back and then opening another view must not change the stack an
+// older copy of the model holds: models are values, and the copies share the
+// stack's array.
+func TestModelViewStackIsNotShared(t *testing.T) {
+	opened := openItemsView(t, 0, 150, 30)
+
+	const other view = 99 // a view pushed where the line pointers were
+
+	_ = opened.pop().push(other)
+
+	if opened.current() != viewItems {
+		t.Errorf("the original model is now on view %v, want the line pointer view", opened.current())
+	}
+}
+
+// Line pointers read for a page the user already left are dropped.
+func TestModelStaleItemsMsg(t *testing.T) {
+	m := openItemsView(t, 0, 150, 30)
+
+	next, _ := m.Update(itemsMsg{block: 2, ids: make([]pgpage.ItemID, 7)})
+	m, _ = next.(Model)
+
+	if m.items.block != 0 || len(m.items.ids) != 185 {
+		t.Errorf("items of block %d with %d line pointers, want block 0 with 185", m.items.block, len(m.items.ids))
+	}
+}
+
+// The help of the line pointer view describes its keys.
+func TestModelItemsHelp(t *testing.T) {
+	view := press(t, openItemsView(t, 0, 150, 30), "?").View()
+
+	for _, want := range []string{"previous item", "last item", "page view"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("help does not contain %q:\n%s", want, view)
+		}
+	}
+
+	if strings.Contains(view, "go to block") || !strings.Contains(view, "go to line pointer") {
+		t.Errorf("the help does not say that g goes to a line pointer here:\n%s", view)
+	}
+}
+
+// The line pointer view fits the terminal like the page view does.
+func TestModelItemsViewFits(t *testing.T) {
+	for _, size := range [][2]int{{150, 30}, {100, 20}, {60, 12}} {
+		view := press(t, openItemsView(t, 2, size[0], size[1]), "end").View()
+		lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+
+		if len(lines) > size[1] {
+			t.Errorf("%dx%d: %d lines", size[0], size[1], len(lines))
+		}
+
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got > size[0] {
+				t.Errorf("%dx%d: line %d is %d cells wide", size[0], size[1], i, got)
+			}
+		}
+	}
+}
+
+// In the line pointer view, g asks for a line pointer and selects it.
+func TestModelGoToItem(t *testing.T) {
+	m := press(t, openItemsView(t, 2, 150, 30), "g")
+
+	if !m.prompt.active || !strings.Contains(m.View(), "GO TO LINE POINTER") {
+		t.Fatalf("g did not open the line pointer prompt:\n%s", m.View())
+	}
+
+	m = press(t, m, "1", "0", "enter")
+
+	if m.items.selected != 9 || m.block != 2 || m.current() != viewItems {
+		t.Errorf("item index %d on block %d, want #10 (index 9) on block 2", m.items.selected, m.block)
+	}
+
+	if !strings.Contains(m.View(), "LINE POINTER #10") {
+		t.Errorf("the panel does not show #10:\n%s", m.View())
+	}
+}
+
+// A 0 or a number past the last line pointer keeps the prompt open and says
+// why; Esc gives up and leaves the selection where it was.
+func TestModelGoToItemRejects(t *testing.T) {
+	m := press(t, openItemsView(t, 2, 150, 30), "down", "g", "0", "enter")
+
+	if !m.prompt.active || !strings.Contains(m.View(), "numbers start at 1") {
+		t.Errorf("0 was not rejected with the reason:\n%s", m.View())
+	}
+
+	m = press(t, m, "esc")
+
+	if m.prompt.active || m.items.selected != 1 || m.current() != viewItems {
+		t.Errorf("esc: prompt open %v, item index %d, view %v; want closed, 1, line pointers",
+			m.prompt.active, m.items.selected, m.current())
 	}
 }

@@ -16,6 +16,8 @@ func bindings() map[string]key.Binding {
 		"PageDown": keys.PageDown,
 		"Home":     keys.Home,
 		"End":      keys.End,
+		"GoTo":     keys.GoTo,
+		"Open":     keys.Open,
 		"Help":     keys.Help,
 		"Quit":     keys.Quit,
 		"Back":     keys.Back,
@@ -85,6 +87,35 @@ func TestFullHelpCoversEveryKey(t *testing.T) {
 	for name, binding := range bindings() {
 		if !shown[binding.Help().Key] {
 			t.Errorf("%s is bound but missing from the help screen", name)
+		}
+	}
+}
+
+// The line pointer view moves with the same keys as the page view; only the
+// descriptions change. A key that differs would be a key to learn twice.
+func TestItemKeysMatchPageKeys(t *testing.T) {
+	pairs := map[string][2]key.Binding{
+		"Up":       {keys.Up, itemKeys.Up},
+		"Down":     {keys.Down, itemKeys.Down},
+		"PageUp":   {keys.PageUp, itemKeys.PageUp},
+		"PageDown": {keys.PageDown, itemKeys.PageDown},
+		"Home":     {keys.Home, itemKeys.Home},
+		"End":      {keys.End, itemKeys.End},
+		"GoTo":     {keys.GoTo, itemKeys.GoTo},
+		"Help":     {keys.Help, itemKeys.Help},
+		"Back":     {keys.Back, itemKeys.Back},
+		"Quit":     {keys.Quit, itemKeys.Quit},
+	}
+
+	for name, pair := range pairs {
+		if strings.Join(pair[0].Keys(), ",") != strings.Join(pair[1].Keys(), ",") {
+			t.Errorf("%s: page view keys %v, line pointer view keys %v", name, pair[0].Keys(), pair[1].Keys())
+		}
+	}
+
+	for name, binding := range map[string]key.Binding{"Open": itemKeys.Open} {
+		if binding.Enabled() {
+			t.Errorf("%s is enabled in the line pointer view, where it does nothing", name)
 		}
 	}
 }

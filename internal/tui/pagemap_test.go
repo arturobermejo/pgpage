@@ -352,3 +352,35 @@ func TestPageMapCellsAreUnderlined(t *testing.T) {
 		t.Errorf("the tuples row is not drawn as %q:\n%q", want, rows[mapRows-1])
 	}
 }
+
+// A highlight paints the cells its bytes fall in, and nothing else, and the
+// legend names it.
+func TestPageMapHighlight(t *testing.T) {
+	summary := pgpage.SummarizePage(fixturePage(t, 0))
+	hl := highlight{start: 8152, end: 8187, label: "item #1"}
+
+	m := pageMapWith(summary, true, 71, hl) // 64 cells: 8 bytes each
+	rows := mapLines(t, m)
+
+	for i, row := range rows {
+		has := strings.Contains(row, highlightGlyph)
+
+		// 8152 falls in the last row, 7680-8191.
+		if want := i == mapRows-1; has != want {
+			t.Errorf("row %d highlighted = %v, want %v:\n%s", i, has, want, row)
+		}
+	}
+
+	// 35 bytes starting mid-cell touch 5 cells of 8 bytes.
+	if n := strings.Count(rows[mapRows-1], highlightGlyph); n != 5 {
+		t.Errorf("%d highlighted cells, want 5:\n%s", n, rows[mapRows-1])
+	}
+
+	if !strings.Contains(m, "item #1 bytes 8152-8186 · 35 B") {
+		t.Errorf("the legend does not name the highlight:\n%s", m)
+	}
+
+	if plain := pageMap(summary, true, 71); strings.Contains(plain, highlightGlyph) {
+		t.Errorf("the map highlights bytes nobody asked for:\n%s", plain)
+	}
+}

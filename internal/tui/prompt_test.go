@@ -74,9 +74,9 @@ func TestParseBlockOnePage(t *testing.T) {
 // The prompt shows what can be typed and, after a bad attempt, what was
 // wrong with it.
 func TestPromptView(t *testing.T) {
-	p, _ := newPrompt().open()
+	p, _ := newPrompt().open(blockTarget(128))
 
-	view := p.view(128)
+	view := p.view()
 
 	for _, want := range []string{"GO TO BLOCK", "block", "range 0-127", "Esc cancel", "0x for hex"} {
 		if !strings.Contains(view, want) {
@@ -86,7 +86,7 @@ func TestPromptView(t *testing.T) {
 
 	p.err = "block 300 is past the last one, 127"
 
-	view = p.view(128)
+	view = p.view()
 
 	if !strings.Contains(view, "past the last one") {
 		t.Errorf("prompt does not show the error:\n%s", view)
@@ -99,7 +99,7 @@ func TestPromptView(t *testing.T) {
 
 // Opening the prompt clears whatever was typed the last time.
 func TestPromptOpenClears(t *testing.T) {
-	p, _ := newPrompt().open()
+	p, _ := newPrompt().open(blockTarget(128))
 	p.input.SetValue("41")
 	p.err = "boom"
 
@@ -109,7 +109,7 @@ func TestPromptOpenClears(t *testing.T) {
 		t.Error("the prompt stayed active after close")
 	}
 
-	p, _ = p.open()
+	p, _ = p.open(itemTarget(12))
 
 	if p.input.Value() != "" || p.err != "" {
 		t.Errorf("the prompt reopened with %q and error %q", p.input.Value(), p.err)
@@ -117,5 +117,51 @@ func TestPromptOpenClears(t *testing.T) {
 
 	if !p.active {
 		t.Error("the prompt is not active after open")
+	}
+}
+
+// Line pointers are numbered from 1, so the prompt for them starts its range
+// there and explains a 0 instead of calling it out of range.
+func TestItemTargetParse(t *testing.T) {
+	target := itemTarget(180)
+
+	tests := []struct {
+		text  string
+		want  uint64
+		error string
+	}{
+		{text: "1", want: 1},
+		{text: "180", want: 180},
+		{text: "0x10", want: 16},
+		{text: "0", error: "line pointer numbers start at 1"},
+		{text: "181", error: "line pointer 181 is past the last one, 180"},
+		{text: "", error: "type a line pointer number between 1 and 180"},
+		{text: "x", error: `"x" is not a line pointer number`},
+	}
+
+	for _, tt := range tests {
+		n, err := target.parse(tt.text)
+
+		switch {
+		case tt.error != "":
+			if err == nil || err.Error() != tt.error {
+				t.Errorf("parse(%q) error = %v, want %q", tt.text, err, tt.error)
+			}
+		case err != nil || n != tt.want:
+			t.Errorf("parse(%q) = %d, %v; want %d", tt.text, n, err, tt.want)
+		}
+	}
+}
+
+// The prompt names what it asks for and the range of that.
+func TestPromptViewNamesTheTarget(t *testing.T) {
+	p, _ := newPrompt().open(itemTarget(180))
+
+	view := p.view()
+
+	for _, want := range []string{"GO TO LINE POINTER", "line pointer", "range 1-180"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("prompt does not contain %q:\n%s", want, view)
+		}
 	}
 }

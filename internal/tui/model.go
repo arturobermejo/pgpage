@@ -41,6 +41,14 @@ type Model struct {
 	// key, so the shortcuts below are not reachable.
 	prompt prompt
 
+	// views is the stack of views the user went through: the pages first,
+	// then whatever Enter opened on top. Esc goes back down it.
+	views []view
+
+	// items is the line pointer view's state: the line pointers of the page
+	// it was opened on, and which one is selected.
+	items items
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -49,9 +57,9 @@ type Model struct {
 }
 
 // Lines the screen spends on everything but the rows of the navigator: the
-// top bar and its blank line, the list title, the "N more" line, another
-// blank line and the help line.
-const listChrome = 6
+// top bar and the rule below it, the top and bottom borders of the panels,
+// the "N more" line, and the rule and the help line at the bottom.
+const listChrome = 7
 
 // Rows of the navigator when the terminal size is unknown, and the fewest it
 // may shrink to.
@@ -60,12 +68,60 @@ const (
 	minListRows     = 1
 )
 
+// view is one of the screens of the explorer.
+type view int
+
+const (
+	viewPages view = iota // the relation: pages, page map and page header
+	viewItems             // one page: its line pointers
+)
+
 var _ tea.Model = Model{}
 
 // New returns the model of an explorer on rel, which the caller must keep
 // open until Run returns.
 func New(rel *pgpage.Relation) Model {
-	return Model{rel: rel, summaries: summaryCache{}, help: help.New(), prompt: newPrompt()}
+	return Model{
+		rel:       rel,
+		summaries: summaryCache{},
+		help:      help.New(),
+		prompt:    newPrompt(),
+		views:     []view{viewPages},
+	}
+}
+
+// current returns the view on top of the stack, the one on screen.
+func (m Model) current() view {
+	return m.views[len(m.views)-1]
+}
+
+// push puts v on top of the view stack.
+func (m Model) push(v view) Model {
+	m.views = append(m.views, v)
+
+	return m
+}
+
+// pop takes the view on top off the stack, back to the one below.
+//
+// The full slice expression caps the stack at its new length. Without it the
+// popped stack would keep the old array's spare room, and the next push would
+// write into the array that older copies of the model still read, changing
+// the view those copies are on.
+func (m Model) pop() Model {
+	n := len(m.views) - 1
+	m.views = m.views[:n:n]
+
+	return m
+}
+
+// keyMap returns the bindings of the view on screen.
+func (m Model) keyMap() keyMap {
+	if m.current() == viewItems {
+		return itemKeys
+	}
+
+	return keys
 }
 
 // Init returns the command to run before the first View: reading the pages
@@ -108,8 +164,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// so the navigator may have to scroll to keep showing the selection,
 		// and it may now show pages nobody has read yet.
 		m.top = scrollTo(m.rel.PageCount(), m.top, m.block, m.visibleRows())
+		m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
 
 		return m, m.refresh()
+
+	case itemsMsg:
+		// Line pointers of a page the user already left are of no use: by
+		// the time they arrive, Esc and Enter may have opened another page.
+		if msg.block != m.items.block {
+			return m, nil
+		}
+
+		m.items.loaded = true
+		m.items.header, m.items.ids, m.items.err = msg.header, msg.ids, msg.err
+		m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
 
 	case summariesMsg:
 		// The command read these pages while the UI went on. Writing them
@@ -125,6 +193,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePrompt(msg)
 		}
 
+		if m.current() == viewItems {
+			return m.updateItems(msg)
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			// tea.Quit is a command, not an action: returning it asks the
@@ -132,19 +204,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, keys.GoTo):
+			if m.rel.PageCount() == 0 {
+				return m, nil // no block to go to
+			}
+
 			var cmd tea.Cmd
 
 			m.showHelp = false
-			m.prompt, cmd = m.prompt.open()
+			m.prompt, cmd = m.prompt.open(blockTarget(m.rel.PageCount()))
 
 			return m, cmd
+
+		case key.Matches(msg, keys.Open):
+			return m.openItems()
 
 		case key.Matches(msg, keys.Help):
 			m.showHelp = !m.showHelp
 
 		case key.Matches(msg, keys.Back):
-			// Back closes the help; at the top level there is nothing else
-			// to go back to, so it quits.
+			// Back closes the help; at the bottom of the stack there is
+			// nothing else to go back to, so it quits.
 			if !m.showHelp {
 				return m, tea.Quit
 			}
@@ -174,6 +253,94 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openItems opens the line pointer view on the selected page. Only a page
+// whose header is valid has line pointers to show; on any other, Enter does
+// nothing, and the page view keeps explaining why.
+func (m Model) openItems() (tea.Model, tea.Cmd) {
+	summary, cached := m.summaries[m.block]
+	if !cached || summary.Status != pgpage.StatusOK {
+		return m, nil
+	}
+
+	m.showHelp = false
+	m = m.push(viewItems)
+	m.items = items{block: m.block}
+
+	return m, loadItems(m.rel, m.block)
+}
+
+// updateItems handles a key in the line pointer view. The keys that move
+// are the ones of the page view, and here they move the selected line
+// pointer instead of the selected page.
+func (m Model) updateItems(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, itemKeys.Quit):
+		return m, tea.Quit
+
+	case key.Matches(msg, itemKeys.Help):
+		m.showHelp = !m.showHelp
+
+	case key.Matches(msg, itemKeys.GoTo):
+		if len(m.items.ids) == 0 {
+			return m, nil // not read yet, or a page without line pointers
+		}
+
+		var cmd tea.Cmd
+
+		m.showHelp = false
+		m.prompt, cmd = m.prompt.open(itemTarget(len(m.items.ids)))
+
+		return m, cmd
+
+	case key.Matches(msg, itemKeys.Back):
+		if m.showHelp {
+			m.showHelp = false
+			break
+		}
+
+		m = m.pop()
+
+	case key.Matches(msg, itemKeys.Up):
+		m = m.selectItem(m.items.selected - 1)
+	case key.Matches(msg, itemKeys.Down):
+		m = m.selectItem(m.items.selected + 1)
+	case key.Matches(msg, itemKeys.PageUp):
+		m = m.selectItem(m.items.selected - m.itemRows())
+	case key.Matches(msg, itemKeys.PageDown):
+		m = m.selectItem(m.items.selected + m.itemRows())
+	case key.Matches(msg, itemKeys.Home):
+		m = m.selectItem(0)
+	case key.Matches(msg, itemKeys.End):
+		m = m.selectItem(len(m.items.ids) - 1)
+	}
+
+	return m, nil
+}
+
+// selectItem selects the line pointer at index, clamped to the array, and
+// scrolls the list the least it takes to show it.
+func (m Model) selectItem(index int) Model {
+	if len(m.items.ids) == 0 {
+		return m
+	}
+
+	m.items.selected = min(max(index, 0), len(m.items.ids)-1)
+	m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
+
+	return m
+}
+
+// itemRows returns how many line pointers the list can show at once: the
+// rows of the page navigator less its column titles and the state counts.
+func (m Model) itemRows() int {
+	return max(m.visibleRows()-itemListChrome, minListRows)
+}
+
+// itemListChrome is the lines of the line pointer list that are not rows,
+// besides the "N more" line listChrome already counts: the column titles,
+// and the blank line and the counts below the rows.
+const itemListChrome = 3
+
 // updatePrompt handles a key while the "go to block" prompt is open: Enter
 // jumps if what was typed is a block of this relation, Esc gives up, and
 // everything else is line editing.
@@ -185,7 +352,7 @@ func (m Model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		block, err := parseBlock(m.prompt.input.Value(), m.rel.PageCount())
+		n, err := m.prompt.target.parse(m.prompt.input.Value())
 		if err != nil {
 			// The prompt stays open with the text and the reason, so the
 			// user can fix a typo instead of typing it all again.
@@ -194,8 +361,15 @@ func (m Model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// The prompt moves the list of the view it was opened in.
+		target := m.prompt.target
 		m.prompt = m.prompt.close()
-		m = m.selectBlock(int64(block))
+
+		if target.view == viewItems {
+			return m.selectItem(int(n) - int(pgpage.FirstOffsetNumber)), nil
+		}
+
+		m = m.selectBlock(int64(n))
 
 		return m, m.refresh()
 
@@ -253,14 +427,27 @@ func (m Model) visibleRows() int {
 // View returns the whole screen as text. It must not change the model nor
 // read anything but it: Bubble Tea may call it after any message.
 func (m Model) View() string {
-	body, footer := m.body(), m.help.ShortHelpView(keys.ShortHelp())
+	km := m.keyMap()
+	short := km.ShortHelp()
+
+	if m.current() != viewPages {
+		// Esc goes back from any view but the first, where it quits and q
+		// already says so.
+		short = append(short[:len(short)-2:len(short)-2], km.Back, km.Help, km.Quit)
+	}
+
+	body, footer := m.body(), m.help.ShortHelpView(short)
+
+	if m.current() == viewItems {
+		body = m.itemsBody()
+	}
 
 	if m.prompt.active {
-		footer = m.prompt.view(m.rel.PageCount())
+		footer = m.prompt.view()
 	}
 
 	if m.showHelp {
-		content := helpScreen(m.help, keys)
+		content := helpScreen(m.help, km)
 		width := m.innerWidth()
 
 		if width <= 0 {
@@ -268,7 +455,7 @@ func (m Model) View() string {
 		}
 
 		body = panel("KEYS", content, width, m.bodyHeight(content), borderStyle)
-		footer = m.help.ShortHelpView([]key.Binding{keys.Help, keys.Back})
+		footer = m.help.ShortHelpView([]key.Binding{km.Help, describe(km.Back, "close the help")})
 	}
 
 	width := m.innerWidth()
@@ -382,6 +569,44 @@ func (m Model) body() string {
 	}
 
 	panels = append(panels, panel(headerTitle, header, headerWidth, height, borderStyle))
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
+}
+
+// itemsBody renders the line pointer view: the list of line pointers, the
+// page map with the selected one's tuple highlighted, and the selected line
+// pointer in detail. Like the page view, it drops the map first and keeps
+// the list, which is what the keys act on.
+func (m Model) itemsBody() string {
+	title := "LINE POINTERS"
+	if m.items.loaded {
+		title = fmt.Sprintf("LINE POINTERS · %d", len(m.items.ids))
+	}
+
+	list := itemList(m.items, m.itemRows())
+	height := m.bodyHeight(list)
+
+	listBox := panel(title, list, boxWidth(title, list), height, borderStyle)
+	left := m.detailWidth(listBox)
+
+	detailTitle, detail := itemTitle(m.items), itemPanel(m.items)
+	detailWidth := max(boxWidth(detailTitle, detail), fieldColumn+itemPanelWidth+panelFrame)
+
+	if detailWidth > left {
+		return listBox
+	}
+
+	panels := []string{listBox}
+
+	if mapWidth := left - detailWidth - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
+		summary, cached := m.summaries[m.items.block]
+		mapTitle := fmt.Sprintf("PAGE %d — %d BYTES", m.items.block, pgpage.PageSize)
+		content := pageMapWith(summary, cached, mapWidth-panelFrame, itemHighlight(m.items))
+
+		panels = append(panels, panel(mapTitle, content, mapWidth, height, borderStyle))
+	}
+
+	panels = append(panels, panel(detailTitle, detail, detailWidth, height, borderStyle))
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
 }

@@ -37,6 +37,11 @@ var (
 	newStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("80"))
 	invalidStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
 
+	// Line pointer states. A dead line pointer is part of a page's normal
+	// life, not damage, so it is a dusty red and not the red of INVALID.
+	deadStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
+	redirectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("146"))
+
 	// Key bindings in the help line.
 	helpKeyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	helpDescStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
@@ -62,6 +67,10 @@ var regionPalette = map[pgpage.RegionKind]regionColors{
 	pgpage.RegionTuples:       {background: "144", line: "101"}, // sand gray
 	pgpage.RegionSpecial:      {background: "244", line: "240"}, // gray
 }
+
+// highlightColors paint the bytes of the selected line pointer on the map: the
+// color of the selection everywhere else, so the eye links the two.
+var highlightColors = regionColors{background: "177", line: "133"}
 
 // helpStyles returns the styles of the help component, which comes with a
 // palette of its own that has nothing to do with ours.
