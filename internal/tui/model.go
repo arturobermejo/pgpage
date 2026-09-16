@@ -74,6 +74,7 @@ type view int
 const (
 	viewPages view = iota // the relation: pages, page map and page header
 	viewItems             // one page: its line pointers
+	viewTuple             // one line pointer: its tuple
 )
 
 var _ tea.Model = Model{}
@@ -117,11 +118,14 @@ func (m Model) pop() Model {
 
 // keyMap returns the bindings of the view on screen.
 func (m Model) keyMap() keyMap {
-	if m.current() == viewItems {
+	switch m.current() {
+	case viewItems:
 		return itemKeys
+	case viewTuple:
+		return tupleKeys
+	default:
+		return keys
 	}
-
-	return keys
 }
 
 // Init returns the command to run before the first View: reading the pages
@@ -176,7 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.items.loaded = true
-		m.items.header, m.items.ids, m.items.err = msg.header, msg.ids, msg.err
+		m.items.page, m.items.header, m.items.ids, m.items.err = msg.page, msg.header, msg.ids, msg.err
 		m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
 
 	case summariesMsg:
@@ -193,8 +197,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePrompt(msg)
 		}
 
-		if m.current() == viewItems {
+		switch m.current() {
+		case viewItems:
 			return m.updateItems(msg)
+		case viewTuple:
+			return m.updateTuple(msg)
 		}
 
 		switch {
@@ -280,6 +287,14 @@ func (m Model) updateItems(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, itemKeys.Help):
 		m.showHelp = !m.showHelp
 
+	case key.Matches(msg, itemKeys.Open):
+		// Only a line pointer that points to tuple bytes has a tuple to
+		// open; the bytes are already here, in the page this view read.
+		if m.items.selected < len(m.items.ids) && hasTuple(m.items.ids[m.items.selected]) {
+			m.showHelp = false
+			m = m.push(viewTuple)
+		}
+
 	case key.Matches(msg, itemKeys.GoTo):
 		if len(m.items.ids) == 0 {
 			return m, nil // not read yet, or a page without line pointers
@@ -315,6 +330,51 @@ func (m Model) updateItems(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// updateTuple handles a key in the tuple view. Moving goes to the previous
+// or next line pointer that has a tuple, and changes the selection of the
+// line pointer view too: both views look at the same selected line pointer,
+// so Esc lands on the tuple that was last shown.
+func (m Model) updateTuple(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, tupleKeys.Quit):
+		return m, tea.Quit
+
+	case key.Matches(msg, tupleKeys.Help):
+		m.showHelp = !m.showHelp
+
+	case key.Matches(msg, tupleKeys.Back):
+		if m.showHelp {
+			m.showHelp = false
+			break
+		}
+
+		m = m.pop()
+
+	case key.Matches(msg, tupleKeys.Up):
+		m = m.selectTuple(m.items.selected-1, -1)
+	case key.Matches(msg, tupleKeys.Down):
+		m = m.selectTuple(m.items.selected+1, 1)
+	case key.Matches(msg, tupleKeys.Home):
+		m = m.selectTuple(0, 1)
+	case key.Matches(msg, tupleKeys.End):
+		m = m.selectTuple(len(m.items.ids)-1, -1)
+	}
+
+	return m, nil
+}
+
+// selectTuple selects the first line pointer with a tuple found walking from
+// index in step direction. When there is none that way, the selection stays.
+func (m Model) selectTuple(index, step int) Model {
+	for i := index; i >= 0 && i < len(m.items.ids); i += step {
+		if hasTuple(m.items.ids[i]) {
+			return m.selectItem(i)
+		}
+	}
+
+	return m
 }
 
 // selectItem selects the line pointer at index, clamped to the array, and
@@ -438,8 +498,11 @@ func (m Model) View() string {
 
 	body, footer := m.body(), m.help.ShortHelpView(short)
 
-	if m.current() == viewItems {
+	switch m.current() {
+	case viewItems:
 		body = m.itemsBody()
+	case viewTuple:
+		body = m.tupleBody()
 	}
 
 	if m.prompt.active {
@@ -609,6 +672,25 @@ func (m Model) itemsBody() string {
 	panels = append(panels, panel(detailTitle, detail, detailWidth, height, borderStyle))
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
+}
+
+// tupleBody renders the tuple view: the fields of the tuple header on the
+// left, and on the right what its flags mean and the bytes of its data.
+func (m Model) tupleBody() string {
+	title, fields := tupleTitle(m.items), tuplePanel(m.items)
+	height := m.bodyHeight(fields)
+
+	width := max(boxWidth(title, fields), fieldColumn+tupleValueWidth+panelFrame)
+	box := panel(title, fields, width, height, borderStyle)
+
+	left := m.detailWidth(box)
+	if left < minFlagsWidth+panelFrame {
+		return box
+	}
+
+	flags := panel("DECODED FLAGS", flagsPanel(m.items, left-panelFrame), left, height, borderStyle)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, box, panelGap, flags)
 }
 
 // bodyHeight returns how many lines the framed panels take: everything the

@@ -1064,3 +1064,103 @@ func TestModelGoToItemRejects(t *testing.T) {
 			m.prompt.active, m.items.selected, m.current())
 	}
 }
+
+// openTupleView opens the tuple of line pointer n of block of the fixture.
+func openTupleView(t *testing.T, block pgpage.BlockNumber, n, width, height int) Model {
+	t.Helper()
+
+	m := press(t, openItemsView(t, block, width, height), "g", fmt.Sprint(n), "enter", "enter")
+
+	if m.current() != viewTuple {
+		t.Fatalf("enter on #%d of block %d did not open the tuple view", n, block)
+	}
+
+	return m
+}
+
+// Enter on a line pointer with a tuple opens it, decoded from the page the
+// line pointer view already read.
+func TestModelOpenTuple(t *testing.T) {
+	m := press(t, openItemsView(t, 2, 150, 32), "g", "2", "enter")
+
+	next, cmd := m.Update(keyMsg("enter"))
+	m, _ = next.(Model)
+
+	if m.current() != viewTuple || len(m.views) != 3 {
+		t.Fatalf("views = %v, want the tuple view on top", m.views)
+	}
+
+	if cmd != nil {
+		t.Error("opening a tuple ran a command; the page is already in memory")
+	}
+
+	view := m.View()
+
+	for _, want := range []string{"TUPLE #2", "DECODED FLAGS", "t_xmin", "HEAP_XMIN_COMMITTED", "next tuple", "Esc line pointers"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+}
+
+// Line pointers without a tuple have nothing to open.
+func TestModelOpenTupleWithoutOne(t *testing.T) {
+	for _, n := range []string{"1", "10"} { // #1 is dead, #10 a redirect
+		m := press(t, openItemsView(t, 2, 150, 32), "g", n, "enter", "enter")
+
+		if m.current() != viewItems {
+			t.Errorf("enter on #%s opened view %v, want to stay on the line pointers", n, m.current())
+		}
+	}
+}
+
+// Moving in the tuple view goes from tuple to tuple, skipping the line
+// pointers that have none, and Esc lands on the last tuple shown.
+func TestModelTupleNavigation(t *testing.T) {
+	m := openTupleView(t, 2, 9, 150, 32) // #9; #10 is a redirect
+
+	if m = press(t, m, "down"); number(m.items.selected) != 11 {
+		t.Errorf("down from #9 went to #%d, want #11, past the redirect", number(m.items.selected))
+	}
+
+	if m = press(t, m, "home"); number(m.items.selected) != 2 {
+		t.Errorf("home went to #%d, want #2, the first tuple after the dead #1", number(m.items.selected))
+	}
+
+	if m = press(t, m, "up"); number(m.items.selected) != 2 {
+		t.Errorf("up from the first tuple went to #%d, want to stay on #2", number(m.items.selected))
+	}
+
+	back := press(t, m, "esc")
+
+	if back.current() != viewItems || number(back.items.selected) != 2 {
+		t.Errorf("esc left view %v on #%d, want the line pointers on #2", back.current(), number(back.items.selected))
+	}
+
+	if pages := press(t, back, "esc"); pages.current() != viewPages {
+		t.Errorf("esc from the line pointers left view %v, want the pages", pages.current())
+	}
+}
+
+// The tuple view fits the terminal, and keeps the fields panel when there
+// is no room for the flags.
+func TestModelTupleViewFits(t *testing.T) {
+	for _, size := range [][2]int{{150, 32}, {100, 24}, {60, 16}} {
+		view := openTupleView(t, 2, 168, size[0], size[1]).View()
+		lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+
+		if len(lines) > size[1] {
+			t.Errorf("%dx%d: %d lines", size[0], size[1], len(lines))
+		}
+
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got > size[0] {
+				t.Errorf("%dx%d: line %d is %d cells wide", size[0], size[1], i, got)
+			}
+		}
+
+		if !strings.Contains(view, "TUPLE #168") {
+			t.Errorf("%dx%d: the tuple panel is missing:\n%s", size[0], size[1], view)
+		}
+	}
+}

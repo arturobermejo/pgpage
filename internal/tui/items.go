@@ -12,9 +12,13 @@ import (
 
 // items is what the line pointer view shows: the line pointers of one page,
 // which of them is selected, and which the list starts at.
+//
+// It keeps the page too. The tuple view decodes the selected tuple from
+// these bytes, so opening a tuple, or moving between tuples, reads nothing.
 type items struct {
 	block  pgpage.BlockNumber
 	loaded bool
+	page   []byte
 	header pgpage.PageHeader
 	ids    []pgpage.ItemID
 	err    error
@@ -23,9 +27,11 @@ type items struct {
 	top      int // index of the first row the list shows
 }
 
-// itemsMsg carries the line pointers a command read from one page.
+// itemsMsg carries the line pointers a command read from one page, and the
+// page they were read from.
 type itemsMsg struct {
 	block  pgpage.BlockNumber
+	page   []byte
 	header pgpage.PageHeader
 	ids    []pgpage.ItemID
 	err    error
@@ -43,12 +49,12 @@ func loadItems(rel *pgpage.Relation, block pgpage.BlockNumber) tea.Cmd {
 
 		h, err := pgpage.ParsePageHeader(page)
 		if err != nil {
-			return itemsMsg{block: block, err: err}
+			return itemsMsg{block: block, page: page, err: err}
 		}
 
 		ids, err := pgpage.ParseItemIDs(page, h, nil)
 
-		return itemsMsg{block: block, header: h, ids: ids, err: err}
+		return itemsMsg{block: block, page: page, header: h, ids: ids, err: err}
 	}
 }
 

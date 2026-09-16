@@ -42,6 +42,10 @@ var (
 	deadStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	redirectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("146"))
 
+	// A caveat the reader should keep in mind, such as the tuple bytes that
+	// cannot be decoded without the table's schema.
+	noteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
+
 	// Key bindings in the help line.
 	helpKeyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	helpDescStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))

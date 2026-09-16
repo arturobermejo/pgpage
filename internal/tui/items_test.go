@@ -20,7 +20,7 @@ func fixtureItems(t *testing.T, block pgpage.BlockNumber) items {
 		t.Fatal("loadItems did not return an itemsMsg")
 	}
 
-	return items{block: block, loaded: true, header: msg.header, ids: msg.ids, err: msg.err}
+	return items{block: block, loaded: true, page: msg.page, header: msg.header, ids: msg.ids, err: msg.err}
 }
 
 // The command decodes the whole line pointer array of the page: the same

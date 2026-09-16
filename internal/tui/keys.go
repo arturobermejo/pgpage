@@ -100,7 +100,7 @@ var itemKeys = keyMap{
 	Home:     describe(keys.Home, "first item"),
 	End:      describe(keys.End, "last item"),
 	GoTo:     describe(keys.GoTo, "go to line pointer"),
-	Open:     key.NewBinding(key.WithDisabled()),
+	Open:     describe(keys.Open, "tuple"),
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "page view"),
 	Quit:     keys.Quit,
@@ -112,4 +112,21 @@ func describe(binding key.Binding, desc string) key.Binding {
 		key.WithKeys(binding.Keys()...),
 		key.WithHelp(binding.Help().Key, desc),
 	)
+}
+
+// tupleKeys are the bindings of the tuple view, where moving goes from one
+// tuple of the page to the next. Line pointers without a tuple are skipped,
+// so a screen at a time means nothing here and PgUp and PgDn are disabled.
+var tupleKeys = keyMap{
+	Up:       describe(keys.Up, "previous tuple"),
+	Down:     describe(keys.Down, "next tuple"),
+	PageUp:   key.NewBinding(key.WithDisabled()),
+	PageDown: key.NewBinding(key.WithDisabled()),
+	Home:     describe(keys.Home, "first tuple"),
+	End:      describe(keys.End, "last tuple"),
+	GoTo:     key.NewBinding(key.WithDisabled()),
+	Open:     key.NewBinding(key.WithDisabled()),
+	Help:     keys.Help,
+	Back:     describe(keys.Back, "line pointers"),
+	Quit:     keys.Quit,
 }

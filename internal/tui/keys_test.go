@@ -113,9 +113,37 @@ func TestItemKeysMatchPageKeys(t *testing.T) {
 		}
 	}
 
-	for name, binding := range map[string]key.Binding{"Open": itemKeys.Open} {
+	if strings.Join(keys.Open.Keys(), ",") != strings.Join(itemKeys.Open.Keys(), ",") {
+		t.Errorf("Open: page view keys %v, line pointer view keys %v", keys.Open.Keys(), itemKeys.Open.Keys())
+	}
+}
+
+// The tuple view moves with the same keys too, and disables the ones that
+// mean nothing between tuples.
+func TestTupleKeysMatchPageKeys(t *testing.T) {
+	pairs := map[string][2]key.Binding{
+		"Up":   {keys.Up, tupleKeys.Up},
+		"Down": {keys.Down, tupleKeys.Down},
+		"Home": {keys.Home, tupleKeys.Home},
+		"End":  {keys.End, tupleKeys.End},
+		"Help": {keys.Help, tupleKeys.Help},
+		"Back": {keys.Back, tupleKeys.Back},
+		"Quit": {keys.Quit, tupleKeys.Quit},
+	}
+
+	for name, pair := range pairs {
+		if strings.Join(pair[0].Keys(), ",") != strings.Join(pair[1].Keys(), ",") {
+			t.Errorf("%s: page view keys %v, tuple view keys %v", name, pair[0].Keys(), pair[1].Keys())
+		}
+	}
+
+	disabled := map[string]key.Binding{
+		"PageUp": tupleKeys.PageUp, "PageDown": tupleKeys.PageDown, "GoTo": tupleKeys.GoTo, "Open": tupleKeys.Open,
+	}
+
+	for name, binding := range disabled {
 		if binding.Enabled() {
-			t.Errorf("%s is enabled in the line pointer view, where it does nothing", name)
+			t.Errorf("%s is enabled in the tuple view, where it does nothing", name)
 		}
 	}
 }
