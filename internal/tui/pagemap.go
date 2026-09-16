@@ -159,19 +159,22 @@ func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highligh
 // mapRow draws one row of the grid: cells cells covering the bytesPerRow
 // bytes that start at row*bytesPerRow, with the cells hl covers highlighted.
 func mapRow(regions []pgpage.Region, row, cells int, hl highlight) string {
+	return stripRow(regions, row*bytesPerRow, bytesPerRow, cells, hl)
+}
+
+// stripRow draws cells cells covering the span bytes that start at base.
+func stripRow(regions []pgpage.Region, base, span, cells int, hl highlight) string {
 	var (
 		b   strings.Builder
 		cur paint
 		run int
 	)
 
-	base := row * bytesPerRow
-
 	for i := range cells {
 		// Cell boundaries are computed from the cell index, not accumulated,
 		// so rounding cannot drift along the row.
-		start := base + i*bytesPerRow/cells
-		end := max(base+(i+1)*bytesPerRow/cells, start+1)
+		start := base + i*span/cells
+		end := max(base+(i+1)*span/cells, start+1)
 
 		cell := paint{
 			kind:        cellRegion(regions, start, end),

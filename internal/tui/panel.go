@@ -39,17 +39,22 @@ func panel(title, content string, width, height int, border lipgloss.Style) stri
 	var b strings.Builder
 
 	// The top edge is "┌─ TITLE ─────┐": five cells go to the border and
-	// the spaces around a title, which is cut if it does not fit.
-	title = lipgloss.NewStyle().MaxWidth(width - 5).Render(title)
+	// the spaces around a title, which is cut if it does not fit. Without a
+	// title it is a plain edge, like the bottom one.
+	if title == "" {
+		b.WriteString(border.Render(borderTopLeft + strings.Repeat(borderHorizontal, width-2) + borderTopRight))
+	} else {
+		title = lipgloss.NewStyle().MaxWidth(width - 5).Render(title)
 
-	b.WriteString(border.Render(borderTopLeft+borderHorizontal) + " " +
-		titleStyle.Render(title) + " ")
+		b.WriteString(border.Render(borderTopLeft+borderHorizontal) + " " +
+			titleStyle.Render(title) + " ")
 
-	if rest := width - 5 - lipgloss.Width(title); rest > 0 {
-		b.WriteString(border.Render(strings.Repeat(borderHorizontal, rest)))
+		if rest := width - 5 - lipgloss.Width(title); rest > 0 {
+			b.WriteString(border.Render(strings.Repeat(borderHorizontal, rest)))
+		}
+
+		b.WriteString(border.Render(borderTopRight))
 	}
-
-	b.WriteString(border.Render(borderTopRight))
 
 	lines := strings.Split(content, "\n")
 	if height > 0 {

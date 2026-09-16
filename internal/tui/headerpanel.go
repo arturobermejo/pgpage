@@ -69,11 +69,6 @@ func headerPanel(summary pgpage.PageSummary, cached bool) string {
 
 	h := summary.Header
 
-	free := "—"
-	if percent, ok := summary.FreeSpacePercent(); ok {
-		free = fmt.Sprintf("%.0f %%", percent)
-	}
-
 	// Values are plain text, except the two boundaries that the page map
 	// draws: pd_lower ends the line pointers and pd_upper starts the tuples,
 	// so they take the colors of those regions and the eye can match the
@@ -90,7 +85,27 @@ func headerPanel(summary pgpage.PageSummary, cached bool) string {
 		{"pd_prune_xid", fmt.Sprint(uint32(h.PruneXID)), valueStyle},
 	}
 
-	derived := []headerRow{
+	top, bottom := renderRows(stored), renderRows(derivedRows(summary))
+
+	// The rule between what is stored on disk and what is computed from it
+	// spans the panel, which is as wide as its widest possible line.
+	width := max(maxWidth(top), maxWidth(bottom), fieldColumn+headerValueWidth)
+
+	return strings.Join(top, "\n") + "\n\n" + ruleStyle.Render(strings.Repeat(borderHorizontal, width)) +
+		"\n\n" + strings.Join(bottom, "\n")
+}
+
+// derivedRows returns what the header panel computes from the fields of a
+// valid header, below the fields themselves.
+func derivedRows(summary pgpage.PageSummary) []headerRow {
+	h := summary.Header
+
+	free := "—"
+	if percent, ok := summary.FreeSpacePercent(); ok {
+		free = fmt.Sprintf("%.0f %%", percent)
+	}
+
+	rows := []headerRow{
 		{"items", fmt.Sprint(h.ItemCount()), valueStyle},
 		{"free space", fmt.Sprintf("%d B", h.FreeSpace()), valueStyle},
 		{"free", free, valueStyle},
@@ -105,19 +120,10 @@ func headerPanel(summary pgpage.PageSummary, cached bool) string {
 			field = "flags decoded"
 		}
 
-		derived = append(derived, headerRow{field, name, valueStyle})
+		rows = append(rows, headerRow{field, name, valueStyle})
 	}
 
-	derived = append(derived, headerRow{"status", summary.Status.String(), statusStyle(summary.Status)})
-
-	top, bottom := renderRows(stored), renderRows(derived)
-
-	// The rule between what is stored on disk and what is computed from it
-	// spans the panel, which is as wide as its widest possible line.
-	width := max(maxWidth(top), maxWidth(bottom), fieldColumn+headerValueWidth)
-
-	return strings.Join(top, "\n") + "\n\n" + ruleStyle.Render(strings.Repeat(borderHorizontal, width)) +
-		"\n\n" + strings.Join(bottom, "\n")
+	return append(rows, headerRow{"status", summary.Status.String(), statusStyle(summary.Status)})
 }
 
 // headerRow is one field of the header panel and the style of its value.

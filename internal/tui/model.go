@@ -8,6 +8,7 @@ package tui
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -53,6 +54,10 @@ type Model struct {
 	// hex is the hex view's state: the page it dumps and what is selected.
 	hex hexState
 
+	// explain is explain mode's state: the header it explains and the field
+	// in focus.
+	explain explainState
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -76,10 +81,11 @@ const (
 type view int
 
 const (
-	viewPages view = iota // the relation: pages, page map and page header
-	viewItems             // one page: its line pointers
-	viewTuple             // one line pointer: its tuple
-	viewHex               // one page, byte by byte
+	viewPages   view = iota // the relation: pages, page map and page header
+	viewItems               // one page: its line pointers
+	viewTuple               // one line pointer: its tuple
+	viewHex                 // one page, byte by byte
+	viewExplain             // the fields of one page header, explained
 )
 
 var _ tea.Model = Model{}
@@ -130,6 +136,8 @@ func (m Model) keyMap() keyMap {
 		return tupleKeys
 	case viewHex:
 		return hexKeys
+	case viewExplain:
+		return explainKeys
 	default:
 		return keys
 	}
@@ -220,6 +228,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateTuple(msg)
 		case viewHex:
 			return m.updateHex(msg)
+		case viewExplain:
+			return m.updateExplain(msg)
 		}
 
 		switch {
@@ -254,6 +264,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m = m.openHex(m.block, nil, headerHighlight(m.summaries[m.block]))
 
 			return m, loadHex(m.rel, m.block)
+
+		case key.Matches(msg, keys.Explain):
+			return m.openExplain(), nil
 
 		case key.Matches(msg, keys.Help):
 			m.showHelp = !m.showHelp
@@ -401,6 +414,78 @@ func (m Model) updateTuple(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// openExplain opens explain mode on the header of the selected page, with
+// pd_lower selected: the field whose numbers say the most about the page.
+// Like the line pointers, it needs a header that parsed.
+func (m Model) openExplain() Model {
+	summary, cached := m.summaries[m.block]
+	if !cached || summary.Status != pgpage.StatusOK {
+		return m
+	}
+
+	m.showHelp = false
+	m = m.push(viewExplain)
+	m.explain = explainState{block: m.block, summary: summary, field: explainLower}
+
+	return m
+}
+
+// explainLower is the index of pd_lower in explanations.
+var explainLower = slices.IndexFunc(explanations, func(e explanation) bool { return e.field == "pd_lower" })
+
+// updateExplain handles a key in explain mode: the moving keys select a
+// field of the header, x shows its bytes, and e or Esc close the mode.
+func (m Model) updateExplain(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, explainKeys.Quit):
+		return m, tea.Quit
+
+	case key.Matches(msg, explainKeys.Help):
+		m.showHelp = !m.showHelp
+
+	case key.Matches(msg, explainKeys.Back):
+		if m.showHelp {
+			m.showHelp = false
+			break
+		}
+
+		m = m.pop()
+
+	case key.Matches(msg, explainKeys.Hex):
+		// Esc in the hex view comes back here, to the same field.
+		m = m.openHex(m.explain.block, nil, explanations[m.explain.field].highlight())
+
+		return m, loadHex(m.rel, m.explain.block)
+
+	case key.Matches(msg, explainKeys.Up):
+		m = m.selectField(m.explain.field - 1)
+	case key.Matches(msg, explainKeys.Down):
+		m = m.selectField(m.explain.field + 1)
+	case key.Matches(msg, explainKeys.Home):
+		m = m.selectField(0)
+	case key.Matches(msg, explainKeys.End):
+		m = m.selectField(len(explanations) - 1)
+
+	case key.Matches(msg, explainKeys.PageUp):
+		_, _, rows := m.explainLayout()
+		m.explain.scroll = max(m.explain.scroll-(rows-2), 0)
+	case key.Matches(msg, explainKeys.PageDown):
+		lines, _, rows := m.explainLayout()
+		m.explain.scroll = min(m.explain.scroll+(rows-2), maxScroll(len(lines), rows))
+	}
+
+	return m, nil
+}
+
+// selectField selects a field, clamped to the fields of the header as the
+// lists clamp their selection, and shows its explanation from the top.
+func (m Model) selectField(index int) Model {
+	m.explain.field = min(max(index, 0), len(explanations)-1)
+	m.explain.scroll = 0
+
+	return m
 }
 
 // openHex opens the hex view on block with hl selected. page is nil when the
@@ -628,6 +713,8 @@ func (m Model) View() string {
 		body = m.tupleBody()
 	case viewHex:
 		body = m.hexBody()
+	case viewExplain:
+		body = m.explainBody()
 	}
 
 	if m.prompt.active {
@@ -840,6 +927,52 @@ func (m Model) hexBody() string {
 	}
 
 	return panel(title, content, width, m.bodyHeight(content), borderStyle)
+}
+
+// explainBody renders explain mode: the page header on the left, as the
+// page view shows it, with the selected field marked, and its explanation on
+// the right, scrolled if it is taller than the panel. A terminal too narrow
+// for both keeps the explanation, whose title names the field.
+func (m Model) explainBody() string {
+	summary := m.explain.summary
+	e := explanations[m.explain.field]
+
+	list := explainList(summary, m.explain.field)
+	lines, width, rows := m.explainLayout()
+	height := rows + 2
+
+	detail := panel(e.title(summary.Header), strings.Join(scrollLines(lines, m.explain.scroll, rows), "\n"),
+		width, height, borderStyle)
+
+	if listWidth := explainListWidth + panelFrame; width+lipgloss.Width(panelGap)+listWidth <= m.innerWidth() {
+		listBox := panel(headerTitle, list, listWidth, height, borderStyle)
+
+		return lipgloss.JoinHorizontal(lipgloss.Top, listBox, panelGap, detail)
+	}
+
+	return detail
+}
+
+// explainLayout returns the lines of the selected field's explanation, the
+// width of its panel and how many lines of it the panel shows. The list
+// takes a fixed width, and the explanation the rest, or the whole screen when
+// the rest is too narrow to read.
+func (m Model) explainLayout() (lines []string, width, rows int) {
+	e := explanations[m.explain.field]
+
+	width = m.innerWidth()
+	if width <= 0 {
+		width = 2 * defaultDetailWidth
+	}
+
+	if rest := width - explainListWidth - panelFrame - lipgloss.Width(panelGap); rest >= minExplainWidth+panelFrame {
+		width = rest
+	}
+
+	lines = strings.Split(explainPanel(e, m.explain.summary.Header, width-panelFrame), "\n")
+	rows = m.bodyHeight(explainList(m.explain.summary, m.explain.field)) - 2
+
+	return lines, width, rows
 }
 
 // bodyHeight returns how many lines the framed panels take: everything the

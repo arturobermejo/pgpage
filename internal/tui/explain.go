@@ -1,0 +1,505 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/arturobermejo/pgpage"
+)
+
+// explainState is the explain view's state: the page it was opened on, and
+// which field of its header is selected.
+type explainState struct {
+	block   pgpage.BlockNumber
+	summary pgpage.PageSummary
+	field   int // index into explanations
+	scroll  int // lines of the explanation scrolled past
+}
+
+// explanation is what explain mode says about one field of PageHeaderData.
+//
+// The words are data, not code: a field is explained by filling in a value
+// of this type, and the view that draws them is the same for every field.
+// Only what depends on the page, the numbers, is computed.
+type explanation struct {
+	field  string // as PostgreSQL names it in bufpage.h
+	offset int    // where it is stored in the page
+	size   int    // in bytes
+	about  string // what the field is, in one sentence
+
+	// purpose says why the field exists, the problem it solves, and how
+	// says how PostgreSQL keeps and uses it. They are what the user came to
+	// learn; the numbers below them only apply it to this page.
+	purpose string
+	how     string
+
+	note string // a fact worth knowing to read the numbers, if any
+
+	value func(h pgpage.PageHeader) string
+	facts func(h pgpage.PageHeader) []headerRow // inputs of the steps
+	steps func(h pgpage.PageHeader) []step      // what follows from the value
+
+	// mark returns the byte of the page the field points at, for the fields
+	// that are offsets into the page.
+	mark func(h pgpage.PageHeader) (int, bool)
+}
+
+// step is one line of working: a sum, and what its result means.
+//
+//	764 - 24 = 740   bytes used by line pointers
+type step struct {
+	sum     string
+	meaning string
+}
+
+// explanations are the fields of the page header, in the order they are
+// stored, which is the order the list shows them in.
+var explanations = []explanation{
+	{
+		field:  "pd_lsn",
+		offset: 0,
+		size:   8,
+		about:  "Position in the WAL of the last change made to this page.",
+		purpose: "It enforces write-ahead logging: a page may only be written to disk after the WAL " +
+			"has been flushed up to this position, so after a crash the log always holds every " +
+			"change the page on disk may have.",
+		how: "Every change to the page is logged first, and the LSN of that WAL record is stored " +
+			"here. During recovery, a record is replayed on the page only if its LSN is newer than " +
+			"pd_lsn: older ones are already in it. An LSN is a 64-bit byte position in the WAL, " +
+			"written as its two 32-bit halves in hex.",
+		value: func(h pgpage.PageHeader) string { return h.LSN.String() },
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{
+				{fmt.Sprintf("%X · %X", uint64(h.LSN)>>32, uint32(h.LSN)), "high half · low half"},
+				{fmt.Sprint(uint64(h.LSN)), "bytes into the WAL"},
+			}
+		},
+	},
+	{
+		field:  "pd_checksum",
+		offset: 8,
+		size:   2,
+		about:  "Checksum of the page, to detect corruption on disk.",
+		purpose: "Disks and controllers can silently return damaged data. With data checksums on, " +
+			"PostgreSQL reports a broken page when it reads it, instead of using wrong rows.",
+		how: "The checksum is computed when the page is written out, over the whole page and its " +
+			"block number, with this field taken as 0; on read it is computed again and compared. " +
+			"The block number makes a correct page written in the wrong place fail too. Checksums " +
+			"are chosen at initdb, on by default since PostgreSQL 18; with them off, the field is unused.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Checksum) },
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{
+				{fmt.Sprintf("%d = %#04x", h.Checksum, h.Checksum), "a 32-bit hash folded into 1-65535"},
+				{"", "never 0 with checksums on, so 0 can mean they are off"},
+			}
+		},
+	},
+	{
+		field:  "pd_flags",
+		offset: 10,
+		size:   2,
+		about:  "Bits that summarize the state of the whole page.",
+		purpose: "They let PostgreSQL skip work: a flag answers in one bit what would otherwise take " +
+			"looking at every line pointer or tuple of the page.",
+		how: "HAS_FREE_LINES says some line pointers are unused, so a new tuple can reuse one instead " +
+			"of growing the array. FULL is set when an UPDATE found no room, a hint that pruning " +
+			"may pay off. ALL_VISIBLE says every tuple is visible to every transaction, so a scan need " +
+			"not check them one by one; the visibility map keeps the same bit for VACUUM and " +
+			"index-only scans.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprintf("%#04x", uint16(h.Flags)) },
+		facts: func(h pgpage.PageHeader) []headerRow {
+			return []headerRow{
+				flagFact("HAS_FREE_LINES", h.Flags.HasFreeLines()),
+				flagFact("FULL", h.Flags.IsFull()),
+				flagFact("ALL_VISIBLE", h.Flags.IsAllVisible()),
+			}
+		},
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{{fmt.Sprintf("%#04x", uint16(h.Flags)), flagsMeaning(h.Flags)}}
+		},
+	},
+	{
+		field:  "pd_lower",
+		offset: 12,
+		size:   2,
+		about:  "Offset to the end of the line pointer array.",
+		purpose: "With pd_upper it bounds the free space in the middle of the page, so knowing whether " +
+			"a tuple fits is a subtraction, not a search.",
+		how: "Line pointers grow from the header towards the end of the page, 4 bytes each, and a " +
+			"new tuple that needs one moves pd_lower up by 4. They are not removed when their tuple " +
+			"dies, because indexes point at them by number: VACUUM marks them unused, and only " +
+			"trims the ones left unused at the end of the array.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Lower) },
+		facts: func(h pgpage.PageHeader) []headerRow {
+			return []headerRow{
+				{"PageHeaderData", fmt.Sprintf("%d bytes", pgpage.PageHeaderSize), regionText(pgpage.RegionHeader)},
+				{"pd_lower", fmt.Sprintf("%d bytes", h.Lower), regionText(pgpage.RegionLinePointers)},
+			}
+		},
+		steps: func(h pgpage.PageHeader) []step {
+			used := int(h.Lower) - pgpage.PageHeaderSize
+
+			return []step{
+				{fmt.Sprintf("%d - %d = %d", h.Lower, pgpage.PageHeaderSize, used), "bytes used by line pointers"},
+				{fmt.Sprintf("%d ÷ %d = %d", used, itemIDSize, h.ItemCount()), "line pointers (ItemIdData is 4 B)"},
+			}
+		},
+		mark: func(h pgpage.PageHeader) (int, bool) { return int(h.Lower), true },
+	},
+	{
+		field:  "pd_upper",
+		offset: 14,
+		size:   2,
+		about:  "Offset to the beginning of tuple data.",
+		purpose: "It says where the next tuple goes. Tuples fill the page from the end backwards while " +
+			"line pointers grow forwards, so both can grow without knowing in advance how many of " +
+			"each the page will hold.",
+		how: "A new tuple is written just below pd_upper, which moves down by the tuple's size, " +
+			"rounded up to an 8-byte boundary. When pd_upper - pd_lower cannot hold the tuple and its " +
+			"line pointer, it goes to another page. Pruning and VACUUM pack the live tuples back " +
+			"towards the end, and pd_upper moves up again.",
+		note:  "Free space is the region between pd_lower and pd_upper.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Upper) },
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{
+				{fmt.Sprintf("%d - %d = %d", h.Upper, h.Lower, h.FreeSpace()), "bytes free"},
+				{fmt.Sprintf("%d ÷ %d = %.0f %%", h.FreeSpace(), pgpage.PageSize, freePercent(h)), "of the page"},
+			}
+		},
+		mark: func(h pgpage.PageHeader) (int, bool) { return int(h.Upper), true },
+	},
+	{
+		field:  "pd_special",
+		offset: 16,
+		size:   2,
+		about:  "Offset to the special space, at the end of the page.",
+		purpose: "Every kind of relation shares this page layout, but some need a few bytes of their own " +
+			"on each page: a B-tree page keeps the links to its siblings and its level in the tree there.",
+		how: "The bytes from pd_special to the end of the page are reserved when the page is " +
+			"initialized, and only the access method that owns the page reads them. Heap pages need " +
+			"none, so pd_special is 8192 and the space is empty; on an index page it is smaller.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Special) },
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{
+				{fmt.Sprintf("%d - %d = %d", pgpage.PageSize, h.Special, pgpage.PageSize-int(h.Special)), "bytes of special space"},
+			}
+		},
+		mark: func(h pgpage.PageHeader) (int, bool) { return int(h.Special), true },
+	},
+	{
+		field:  "pd_pagesize_version",
+		offset: 18,
+		size:   2,
+		about:  "Size of the page and version of its layout, packed in one field.",
+		purpose: "A page has to say how to read it: the page size is chosen when PostgreSQL is " +
+			"compiled, and the layout of the header has changed across releases.",
+		how: "Page sizes are multiples of 256, so the low byte of the size is always zero, and the " +
+			"version is stored in it. Version 4 is the layout of PostgreSQL 8.3 and later, the only " +
+			"one pgpage reads. The size is 8192 unless PostgreSQL was built with another block size.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(int(h.PageSize) | int(h.LayoutVersion)) },
+		facts: func(h pgpage.PageHeader) []headerRow {
+			return []headerRow{
+				{"page size", fmt.Sprintf("%d bytes", h.PageSize), valueStyle},
+				{"layout version", fmt.Sprint(h.LayoutVersion), valueStyle},
+			}
+		},
+		steps: func(h pgpage.PageHeader) []step {
+			return []step{
+				{fmt.Sprintf("%d | %d = %d", h.PageSize, h.LayoutVersion, int(h.PageSize)|int(h.LayoutVersion)), "as stored"},
+			}
+		},
+	},
+	{
+		field:  "pd_prune_xid",
+		offset: 20,
+		size:   4,
+		about:  "Oldest transaction that may have left something to prune on this page.",
+		purpose: "Pruning reclaims the space of tuple versions nobody can see anymore. This field says " +
+			"whether trying is worth it, without looking at a single tuple.",
+		how: "A DELETE or UPDATE leaves the old version of the row in place and stores its transaction " +
+			"id here, unless an older one is already stored. The next time the page is read, if that " +
+			"transaction is older than every running snapshot, the page is pruned: dead versions are " +
+			"removed, HOT chains shortened, and the field updated. 0 means there is no hint.",
+		value: func(h pgpage.PageHeader) string { return fmt.Sprint(uint32(h.PruneXID)) },
+		steps: func(h pgpage.PageHeader) []step {
+			if h.PruneXID == 0 {
+				return []step{{"0", "nothing on the page is known to be prunable"}}
+			}
+
+			return []step{{fmt.Sprint(uint32(h.PruneXID)), "may have left dead versions behind"}}
+		},
+	},
+}
+
+// itemIDSize is the size of a line pointer, ItemIdData.
+const itemIDSize = 4
+
+// flagFact returns the row of a pd_flags bit: its name, and whether it is set.
+func flagFact(name string, set bool) headerRow {
+	if set {
+		return headerRow{name, "set", okStyle}
+	}
+
+	return headerRow{name, "not set", moreStyle}
+}
+
+// freePercent returns the free space of the page as a percentage, rounded as
+// the header panel rounds it.
+func freePercent(h pgpage.PageHeader) float64 {
+	return float64(h.FreeSpace()) * 100 / pgpage.PageSize
+}
+
+// flagsMeaning names the pd_flags bits that are set.
+func flagsMeaning(flags pgpage.PageFlags) string {
+	if flags == 0 {
+		return "no flag set"
+	}
+
+	return strings.Join(pageFlagNames(flags), " | ")
+}
+
+// title returns the title of the field's panel: "pd_lower = 764".
+func (e explanation) title(h pgpage.PageHeader) string {
+	return e.field + " = " + e.value(h)
+}
+
+// highlight returns the bytes the field is stored in, what x shows.
+func (e explanation) highlight() highlight {
+	return highlight{start: e.offset, end: e.offset + e.size, label: e.field}
+}
+
+// explainPanel renders the explanation of a field, width cells wide:
+//
+//	Offset to the end of the line pointer array.
+//
+//	┌────────────────────────────────────────┐
+//	│ PageHeaderData  24 bytes               │
+//	│ pd_lower        764 bytes              │
+//	│ ────────────────────────────────────── │
+//	│ 764 - 24 = 740  bytes used by line ... │
+//	└────────────────────────────────────────┘
+//
+//	▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏
+//	    ↑ 764
+func explainPanel(e explanation, h pgpage.PageHeader, width int) string {
+	wrap := lipgloss.NewStyle().Width(width)
+
+	parts := []string{
+		wrap.Render(valueStyle.Bold(true).Render(e.about)),
+		moreStyle.Render("PURPOSE") + "\n" + wrap.Render(valueStyle.Render(e.purpose)),
+		moreStyle.Render("HOW IT WORKS") + "\n" + wrap.Render(valueStyle.Render(e.how)),
+		moreStyle.Render("ON THIS PAGE") + "\n" + panel("", explainBox(e, h, width-panelFrame), width, 0, ruleStyle),
+	}
+
+	if e.mark != nil {
+		if at, ok := e.mark(h); ok {
+			parts = append(parts, pageStrip(h, width, at))
+		}
+	}
+
+	return strings.Join(parts, "\n\n")
+}
+
+// explainBox renders the working inside the explanation: the note and the
+// facts the steps start from, a rule, and the steps.
+func explainBox(e explanation, h pgpage.PageHeader, width int) string {
+	var top []string
+
+	if e.note != "" {
+		top = append(top, lipgloss.NewStyle().Width(width).Render(fieldStyle.Render(e.note)))
+	}
+
+	if e.facts != nil {
+		top = append(top, renderRows(e.facts(h))...)
+	}
+
+	var steps []string
+	if e.steps != nil {
+		steps = renderSteps(e.steps(h), width)
+	}
+
+	lines := top
+	if len(top) > 0 && len(steps) > 0 {
+		lines = append(lines, ruleStyle.Render(strings.Repeat(borderHorizontal, width)))
+	}
+
+	return strings.Join(append(lines, steps...), "\n")
+}
+
+// renderSteps lines the steps up: the equals signs of the sums in one column,
+// and the meanings in the next. A step with no sum is a remark, wrapped to
+// width.
+//
+//	764 - 24 = 740  bytes used by line pointers
+//	740 ÷ 4  = 185  line pointers (ItemIdData is 4 B)
+func renderSteps(steps []step, width int) []string {
+	var left, sum int
+
+	for _, s := range steps {
+		if lhs, _, ok := strings.Cut(s.sum, " = "); ok {
+			left = max(left, lipgloss.Width(lhs))
+		}
+	}
+
+	sums := make([]string, len(steps))
+
+	for i, s := range steps {
+		if lhs, rhs, ok := strings.Cut(s.sum, " = "); ok {
+			sums[i] = padRight(lhs, left+1) + "= " + rhs
+		} else {
+			sums[i] = s.sum
+		}
+
+		sum = max(sum, lipgloss.Width(sums[i]))
+	}
+
+	lines := make([]string, len(steps))
+	wrap := lipgloss.NewStyle().Width(width)
+
+	for i, s := range steps {
+		if s.sum == "" {
+			lines[i] = wrap.Render(fieldStyle.Render(s.meaning))
+			continue
+		}
+
+		lines[i] = valueStyle.Render(padRight(sums[i], sum+2)) + fieldStyle.Render(s.meaning)
+	}
+
+	return lines
+}
+
+// pageStrip draws the whole page as one row of width cells, as the page map
+// draws a row, with the cell that holds byte at marked and its offset written
+// under it:
+//
+//	█╱╱╱╱╱╱╱╱╎╎╎╎╎╎╎╎╎╎╎╎╎╎▒╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲╲
+//	                       ↑ 2472
+//
+// An offset can be PageSize, one past the last byte, as pd_special is on a
+// heap page: it marks the last cell.
+func pageStrip(h pgpage.PageHeader, width, at int) string {
+	byteAt := min(max(at, 0), pgpage.PageSize-1)
+	row := stripRow(pgpage.PageRegions(h), 0, pgpage.PageSize, width, highlight{start: byteAt, end: byteAt + 1})
+
+	cell := byteAt * width / pgpage.PageSize
+
+	// The label starts at the arrow, unless it would run past the edge;
+	// then it ends at it, with the arrow on the right.
+	label := fmt.Sprintf("↑ %d", at)
+	if cell+lipgloss.Width(label) > width {
+		label = fmt.Sprintf("%d ↑", at)
+		cell = max(cell-lipgloss.Width(label)+1, 0)
+	}
+
+	return row + "\n" + strings.Repeat(" ", cell) + selectedStyle.Render(label)
+}
+
+// minExplainWidth is the narrowest an explanation panel can be and still
+// hold a step and its meaning.
+const minExplainWidth = 48
+
+// explainStyles color the values of the list as the header panel colors
+// them: the two boundaries in the colors of the regions they end and start.
+var explainStyles = map[string]lipgloss.Style{
+	"pd_lower": regionText(pgpage.RegionLinePointers),
+	"pd_upper": regionText(pgpage.RegionTuples),
+}
+
+// explainColumn is the width of the field names of the list: the longest
+// name, pd_pagesize_version, and a space.
+var explainColumn = func() int {
+	width := 0
+	for _, e := range explanations {
+		width = max(width, lipgloss.Width(e.field))
+	}
+
+	return width + 2
+}()
+
+// explainListWidth is the width of the list's content: the marker, the
+// names and the widest value a header can have.
+var explainListWidth = 2 + explainColumn + headerValueWidth
+
+// explainList renders the page header as the header panel does, one field
+// per line with the selected one marked, and what is derived from them below
+// a rule. Only the stored fields can be selected: they are the ones that have
+// bytes, and an explanation.
+//
+//	  pd_checksum          6769
+//	  pd_flags             0x0000
+//	> pd_lower             764
+//	  pd_upper             2472
+//	  ...
+//	  ──────────────────────────────
+//	  items                185
+func explainList(summary pgpage.PageSummary, selected int) string {
+	h := summary.Header
+	lines := make([]string, 0, len(explanations))
+
+	for i, e := range explanations {
+		style, ok := explainStyles[e.field]
+		if !ok {
+			style = valueStyle
+		}
+
+		row := "  " + fieldStyle.Render(padRight(e.field, explainColumn))
+		if i == selected {
+			row = selectedStyle.Render("> " + padRight(e.field, explainColumn))
+		}
+
+		lines = append(lines, row+style.Render(e.value(h)))
+	}
+
+	indent := "  "
+	rule := indent + ruleStyle.Render(strings.Repeat(borderHorizontal, explainColumn+headerValueWidth))
+
+	lines = append(lines, "", rule, "")
+
+	for _, row := range derivedRows(summary) {
+		lines = append(lines, indent+fieldStyle.Render(padRight(row.name, explainColumn))+row.style.Render(row.value))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// scrollLines returns the lines of an explanation that fit in rows lines,
+// from line scroll on. The lines left out above or below are counted in a
+// hint that takes the first or last row, with the key that shows them.
+func scrollLines(lines []string, scroll, rows int) []string {
+	if len(lines) <= rows || rows < 3 {
+		return lines
+	}
+
+	scroll = min(max(scroll, 0), maxScroll(len(lines), rows))
+
+	var out []string
+
+	if scroll > 0 {
+		out = append(out, moreStyle.Render(fmt.Sprintf("↑ %d more · PgUp", scroll)))
+	}
+
+	end := len(lines)
+	if room := rows - len(out); end-scroll > room {
+		end = scroll + room - 1 // one row for the hint below
+	}
+
+	out = append(out, lines[scroll:end]...)
+
+	if end < len(lines) {
+		out = append(out, moreStyle.Render(fmt.Sprintf("↓ %d more · PgDn", len(lines)-end)))
+	}
+
+	return out
+}
+
+// maxScroll returns how far n lines can scroll in rows rows: until the last
+// line is in view below the hint at the top.
+func maxScroll(n, rows int) int {
+	if n <= rows {
+		return 0
+	}
+
+	return n - rows + 1
+}

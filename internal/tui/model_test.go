@@ -221,6 +221,8 @@ func keyMsg(name string) tea.KeyMsg {
 		"enter":     tea.KeyEnter,
 		"backspace": tea.KeyBackspace,
 		"esc":       tea.KeyEsc,
+		"tab":       tea.KeyTab,
+		"shift+tab": tea.KeyShiftTab,
 	}
 
 	if kind, ok := types[name]; ok {
@@ -1303,5 +1305,156 @@ func TestModelHexFillsThePanel(t *testing.T) {
 		if above := lines[len(lines)-4]; !strings.Contains(above, "highlighted bytes") {
 			t.Errorf("height %d: the panel ends in blank lines:\n%s", height, strings.Join(lines[len(lines)-6:], "\n"))
 		}
+	}
+}
+
+// e opens explain mode on the header of the selected page: the fields on the
+// left with pd_lower selected, and its explanation on the right. Tab selects
+// the next field, and e closes the mode.
+func TestModelExplain(t *testing.T) {
+	m := press(t, loaded(t, 130, 26), "e")
+
+	if m.current() != viewExplain {
+		t.Fatalf("e left view %v, want explain mode", m.current())
+	}
+
+	view := m.View()
+
+	for _, want := range []string{"PAGE HEADER", "> pd_lower", "pd_lower = 764", "PURPOSE", "HOW IT WORKS", "740 ÷ 4  = 185", "close explain"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+
+	// The list is on the left, and the explanation beside it.
+	if line := lineWith(t, view, "pd_lower = 764"); strings.Index(line, "PAGE HEADER") > strings.Index(line, "pd_lower") {
+		t.Errorf("the explanation is not to the right of the list:\n%s", line)
+	}
+
+	next := press(t, m, "tab").View()
+	if !strings.Contains(next, "> pd_upper") || !strings.Contains(next, "pd_upper = 2472") {
+		t.Errorf("tab did not select pd_upper:\n%s", next)
+	}
+
+	if back := press(t, m, "e"); back.current() != viewPages {
+		t.Errorf("e left view %v, want the pages", back.current())
+	}
+}
+
+// The moving keys walk down and up the fields, and stop at both ends.
+func TestModelExplainNavigation(t *testing.T) {
+	m := press(t, loaded(t, 130, 26), "e")
+	last := len(explanations) - 1
+
+	tests := []struct {
+		keys []string
+		want int
+	}{
+		{keys: []string{"down"}, want: explainLower + 1},
+		{keys: []string{"shift+tab", "k"}, want: explainLower - 2},
+		{keys: []string{"home", "up"}, want: 0},
+		{keys: []string{"end", "tab"}, want: last},
+		{keys: repeat("j", len(explanations)), want: last},
+	}
+
+	for _, tt := range tests {
+		if got := press(t, m, tt.keys...).explain.field; got != tt.want {
+			t.Errorf("%v: field %d, want %d", tt.keys, got, tt.want)
+		}
+	}
+
+	if explanations[explainLower].field != "pd_lower" {
+		t.Errorf("explain mode opens on %s", explanations[explainLower].field)
+	}
+}
+
+// A page without a valid header has no fields to explain.
+func TestModelExplainOnBrokenPage(t *testing.T) {
+	m := New(openMixed(t))
+	m.width, m.height = 130, 26
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	if m = press(t, m, "end", "e"); m.current() != viewPages {
+		t.Errorf("e opened view %v on an invalid page", m.current())
+	}
+}
+
+// x shows the bytes of the selected field, and Esc comes back to it.
+func TestModelExplainHex(t *testing.T) {
+	m := press(t, loaded(t, 130, 26), "e", "tab")
+
+	next, cmd := m.Update(keyMsg("x"))
+	hex, _ := next.(Model)
+
+	next, _ = hex.Update(run(t, cmd))
+	hex, _ = next.(Model)
+
+	if view := hex.View(); !strings.Contains(view, "← pd_upper") || !strings.Contains(view, "pd_upper · bytes 14-15 · 2 B") {
+		t.Errorf("the hex view does not select pd_upper:\n%s", view)
+	}
+
+	if back := press(t, hex, "esc"); back.current() != viewExplain || back.explain.field != explainLower+1 {
+		t.Errorf("esc from the hex view left view %v on field %d", back.current(), back.explain.field)
+	}
+}
+
+// Explain mode fits the terminal, and on a narrow one keeps the explanation
+// alone, whose title names the selected field.
+func TestModelExplainFits(t *testing.T) {
+	for _, size := range [][2]int{{130, 26}, {100, 30}, {80, 24}, {60, 20}} {
+		m := press(t, loaded(t, size[0], size[1]), "e")
+		view := m.View()
+		lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+
+		if len(lines) != size[1] {
+			t.Errorf("%dx%d: %d lines", size[0], size[1], len(lines))
+		}
+
+		for _, line := range lines {
+			if got := lipgloss.Width(line); got > size[0] {
+				t.Errorf("%dx%d: a line is %d cells:\n%s", size[0], size[1], got, line)
+			}
+		}
+
+		if !strings.Contains(view, "pd_lower = 764") {
+			t.Errorf("%dx%d: the explanation is missing:\n%s", size[0], size[1], view)
+		}
+
+		wide := size[0]-2 >= explainListWidth+panelFrame+1+minExplainWidth+panelFrame
+		if strings.Contains(view, "PAGE HEADER") != wide {
+			t.Errorf("%dx%d: the list shown = %v, want %v:\n%s", size[0], size[1], !wide, wide, view)
+		}
+	}
+}
+
+// PgDn scrolls an explanation taller than the panel down to its end, where
+// the strip is; PgUp scrolls back, and selecting another field starts it from
+// the top.
+func TestModelExplainScroll(t *testing.T) {
+	m := press(t, loaded(t, 130, 26), "e")
+
+	if view := m.View(); strings.Contains(view, "↑ 764") || !strings.Contains(view, "more · PgDn") {
+		t.Fatalf("the explanation fits at this height, the test needs a shorter terminal:\n%s", view)
+	}
+
+	end := press(t, m, "pgdown", "pgdown", "pgdown")
+
+	if view := end.View(); !strings.Contains(view, "↑ 764") || !strings.Contains(view, "more · PgUp") ||
+		strings.Contains(view, "PgDn") {
+		t.Errorf("pgdown did not reach the end of the explanation:\n%s", view)
+	}
+
+	if top := press(t, end, "pgup", "pgup", "pgup"); top.explain.scroll != 0 || !strings.Contains(top.View(), "PURPOSE") {
+		t.Errorf("pgup did not go back to the top: scroll %d", top.explain.scroll)
+	}
+
+	if other := press(t, end, "down"); other.explain.scroll != 0 {
+		t.Errorf("another field starts scrolled %d lines in", other.explain.scroll)
+	}
+
+	if tall := press(t, loaded(t, 130, 60), "e", "pgdown"); tall.explain.scroll != 0 {
+		t.Errorf("an explanation that fits scrolled %d lines", tall.explain.scroll)
 	}
 }

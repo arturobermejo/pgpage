@@ -17,25 +17,26 @@ type keyMap struct {
 	Home     key.Binding
 	End      key.Binding
 
-	GoTo key.Binding
-	Open key.Binding
-	Hex  key.Binding
-	Help key.Binding
-	Quit key.Binding
-	Back key.Binding
+	GoTo    key.Binding
+	Open    key.Binding
+	Hex     key.Binding
+	Explain key.Binding
+	Help    key.Binding
+	Quit    key.Binding
+	Back    key.Binding
 }
 
 // ShortHelp returns the bindings of the one-line help at the bottom of the
 // screen: the few that a user needs to get anywhere.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Open, k.GoTo, k.Hex, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Open, k.GoTo, k.Hex, k.Explain, k.Help, k.Quit}
 }
 
 // FullHelp returns the bindings of the help screen, in columns.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown},
-		{k.Home, k.End, k.GoTo, k.Open, k.Hex},
+		{k.Home, k.End, k.GoTo, k.Open, k.Hex, k.Explain},
 		{k.Help, k.Back, k.Quit},
 	}
 }
@@ -79,6 +80,10 @@ var keys = keyMap{
 		key.WithKeys("x"),
 		key.WithHelp("x", "hex"),
 	),
+	Explain: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "explain"),
+	),
 	Help: key.NewBinding(
 		key.WithKeys("?", "h"),
 		key.WithHelp("?", "keys"),
@@ -107,6 +112,7 @@ var itemKeys = keyMap{
 	GoTo:     describe(keys.GoTo, "go to line pointer"),
 	Open:     describe(keys.Open, "tuple"),
 	Hex:      describe(keys.Hex, "hex at line pointer"),
+	Explain:  key.NewBinding(key.WithDisabled()),
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "page view"),
 	Quit:     keys.Quit,
@@ -133,6 +139,7 @@ var tupleKeys = keyMap{
 	GoTo:     key.NewBinding(key.WithDisabled()),
 	Open:     key.NewBinding(key.WithDisabled()),
 	Hex:      describe(keys.Hex, "hex at tuple"),
+	Explain:  key.NewBinding(key.WithDisabled()),
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "line pointers"),
 	Quit:     keys.Quit,
@@ -151,10 +158,40 @@ var hexKeys = keyMap{
 	GoTo:     key.NewBinding(key.WithDisabled()),
 	Open:     key.NewBinding(key.WithDisabled()),
 	Hex:      key.NewBinding(key.WithDisabled()),
+	Explain:  key.NewBinding(key.WithDisabled()),
 	Help:     keys.Help,
 	Back: key.NewBinding(
 		key.WithKeys(append(keys.Back.Keys(), keys.Hex.Keys()...)...),
 		key.WithHelp("x/Esc", "close hex"),
+	),
+	Quit: keys.Quit,
+}
+
+// explainKeys are the bindings of explain mode, where the keys move the
+// selection down the fields of the page header. Tab does too, as it does
+// between the fields of a form. e closes the mode it opened, as x closes the
+// hex view.
+var explainKeys = keyMap{
+	Up: key.NewBinding(
+		key.WithKeys(append(keys.Up.Keys(), "shift+tab")...),
+		key.WithHelp("↑/S-Tab", "previous field"),
+	),
+	Down: key.NewBinding(
+		key.WithKeys(append(keys.Down.Keys(), "tab")...),
+		key.WithHelp("↓/Tab", "next field"),
+	),
+	PageUp:   describe(keys.PageUp, "scroll explanation up"),
+	PageDown: describe(keys.PageDown, "scroll explanation down"),
+	Home:     describe(keys.Home, "first field"),
+	End:      describe(keys.End, "last field"),
+	GoTo:     key.NewBinding(key.WithDisabled()),
+	Open:     key.NewBinding(key.WithDisabled()),
+	Hex:      describe(keys.Hex, "show bytes"),
+	Explain:  key.NewBinding(key.WithDisabled()),
+	Help:     keys.Help,
+	Back: key.NewBinding(
+		key.WithKeys(append(keys.Explain.Keys(), keys.Back.Keys()...)...),
+		key.WithHelp("e/Esc", "close explain"),
 	),
 	Quit: keys.Quit,
 }

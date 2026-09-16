@@ -19,6 +19,7 @@ func bindings() map[string]key.Binding {
 		"GoTo":     keys.GoTo,
 		"Open":     keys.Open,
 		"Hex":      keys.Hex,
+		"Explain":  keys.Explain,
 		"Help":     keys.Help,
 		"Quit":     keys.Quit,
 		"Back":     keys.Back,

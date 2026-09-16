@@ -77,3 +77,13 @@ func TestPanelTooNarrow(t *testing.T) {
 		}
 	}
 }
+
+// Without a title the top edge is a plain line, as wide as the bottom one.
+func TestPanelWithoutTitle(t *testing.T) {
+	lines := strings.Split(panel("", "content", 20, 0, borderStyle), "\n")
+
+	want := borderTopLeft + strings.Repeat(borderHorizontal, 18) + borderTopRight
+	if lines[0] != want {
+		t.Errorf("top edge = %q, want %q", lines[0], want)
+	}
+}
