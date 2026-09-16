@@ -19,6 +19,7 @@ type keyMap struct {
 
 	GoTo key.Binding
 	Open key.Binding
+	Hex  key.Binding
 	Help key.Binding
 	Quit key.Binding
 	Back key.Binding
@@ -27,14 +28,14 @@ type keyMap struct {
 // ShortHelp returns the bindings of the one-line help at the bottom of the
 // screen: the few that a user needs to get anywhere.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Open, k.GoTo, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Open, k.GoTo, k.Hex, k.Help, k.Quit}
 }
 
 // FullHelp returns the bindings of the help screen, in columns.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown},
-		{k.Home, k.End, k.GoTo, k.Open},
+		{k.Home, k.End, k.GoTo, k.Open, k.Hex},
 		{k.Help, k.Back, k.Quit},
 	}
 }
@@ -74,6 +75,10 @@ var keys = keyMap{
 		key.WithKeys("enter"),
 		key.WithHelp("↵", "line pointers"),
 	),
+	Hex: key.NewBinding(
+		key.WithKeys("x"),
+		key.WithHelp("x", "hex"),
+	),
 	Help: key.NewBinding(
 		key.WithKeys("?", "h"),
 		key.WithHelp("?", "keys"),
@@ -101,6 +106,7 @@ var itemKeys = keyMap{
 	End:      describe(keys.End, "last item"),
 	GoTo:     describe(keys.GoTo, "go to line pointer"),
 	Open:     describe(keys.Open, "tuple"),
+	Hex:      describe(keys.Hex, "hex at line pointer"),
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "page view"),
 	Quit:     keys.Quit,
@@ -126,7 +132,29 @@ var tupleKeys = keyMap{
 	End:      describe(keys.End, "last tuple"),
 	GoTo:     key.NewBinding(key.WithDisabled()),
 	Open:     key.NewBinding(key.WithDisabled()),
+	Hex:      describe(keys.Hex, "hex at tuple"),
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "line pointers"),
 	Quit:     keys.Quit,
+}
+
+// hexKeys are the bindings of the hex view, where the keys scroll the dump.
+// x closes the view it opened, so Back takes both x and Esc, and the help
+// lists them once.
+var hexKeys = keyMap{
+	Up:       describe(keys.Up, "16 bytes up"),
+	Down:     describe(keys.Down, "16 bytes down"),
+	PageUp:   describe(keys.PageUp, "one screen up"),
+	PageDown: describe(keys.PageDown, "one screen down"),
+	Home:     describe(keys.Home, "start of the page"),
+	End:      describe(keys.End, "end of the page"),
+	GoTo:     key.NewBinding(key.WithDisabled()),
+	Open:     key.NewBinding(key.WithDisabled()),
+	Hex:      key.NewBinding(key.WithDisabled()),
+	Help:     keys.Help,
+	Back: key.NewBinding(
+		key.WithKeys(append(keys.Back.Keys(), keys.Hex.Keys()...)...),
+		key.WithHelp("x/Esc", "close hex"),
+	),
+	Quit: keys.Quit,
 }

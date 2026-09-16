@@ -1164,3 +1164,144 @@ func TestModelTupleViewFits(t *testing.T) {
 		}
 	}
 }
+
+// From the pages, x reads the selected page and opens its dump with the
+// header selected; x again goes back.
+func TestModelHexFromPages(t *testing.T) {
+	m := loaded(t, 130, 26)
+
+	next, cmd := m.Update(keyMsg("x"))
+	m, _ = next.(Model)
+
+	if m.current() != viewHex || !strings.Contains(m.View(), "reading…") {
+		t.Fatalf("x did not open the hex view reading the page:\n%s", m.View())
+	}
+
+	msg, ok := run(t, cmd).(hexMsg)
+	if !ok || msg.block != 0 {
+		t.Fatalf("x did not read block 0: %#v", msg)
+	}
+
+	next, _ = m.Update(msg)
+	m, _ = next.(Model)
+
+	for _, want := range []string{"BYTES · BLOCK 0", "0000", "← page header", "page header · bytes 0-23"} {
+		if !strings.Contains(m.View(), want) {
+			t.Errorf("view does not contain %q:\n%s", want, m.View())
+		}
+	}
+
+	if back := press(t, m, "x"); back.current() != viewPages {
+		t.Errorf("x left view %v, want the pages", back.current())
+	}
+}
+
+// From the line pointers and from a tuple, the page is already in memory:
+// the dump opens at once, scrolled to the selection.
+func TestModelHexFromItemsAndTuple(t *testing.T) {
+	items := press(t, openItemsView(t, 2, 130, 26), "g", "1", "6", "8", "enter")
+
+	next, cmd := items.Update(keyMsg("x"))
+	fromItems, _ := next.(Model)
+
+	if cmd != nil {
+		t.Error("x from the line pointers read the page again")
+	}
+
+	if view := fromItems.View(); !strings.Contains(view, "← line pointer #168") {
+		t.Errorf("the entry of #168 is not on screen:\n%s", view)
+	}
+
+	fromTuple := press(t, items, "enter", "x")
+
+	if view := fromTuple.View(); !strings.Contains(view, "← tuple #168") || !strings.Contains(view, "0x0B38") {
+		t.Errorf("the tuple #168 is not on screen:\n%s", view)
+	}
+
+	if back := press(t, fromTuple, "esc"); back.current() != viewTuple {
+		t.Errorf("esc from the hex view left view %v, want the tuple", back.current())
+	}
+}
+
+// The moving keys scroll the dump a line, a screen, or to either end.
+func TestModelHexScroll(t *testing.T) {
+	m := press(t, openItemsView(t, 0, 130, 26), "x") // #1's entry: already at the top
+
+	if m.hex.vp.YOffset != 0 {
+		t.Fatalf("the dump starts at line %d, want 0", m.hex.vp.YOffset)
+	}
+
+	if m = press(t, m, "down"); m.hex.vp.YOffset != 1 {
+		t.Errorf("down scrolled to line %d, want 1", m.hex.vp.YOffset)
+	}
+
+	if m = press(t, m, "pgdown"); m.hex.vp.YOffset != 1+m.hex.vp.Height {
+		t.Errorf("pgdown scrolled to line %d, want %d", m.hex.vp.YOffset, 1+m.hex.vp.Height)
+	}
+
+	if m = press(t, m, "end"); !m.hex.vp.AtBottom() || !strings.Contains(m.View(), "1ff0") {
+		t.Errorf("end did not show the last line of the page:\n%s", m.View())
+	}
+
+	if m = press(t, m, "home"); m.hex.vp.YOffset != 0 {
+		t.Errorf("home scrolled to line %d, want 0", m.hex.vp.YOffset)
+	}
+}
+
+// A page without a valid header still has bytes to look at.
+func TestModelHexOnBrokenPage(t *testing.T) {
+	m := New(openMixed(t))
+	m.width, m.height = 130, 26
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	next, cmd := press(t, m, "end").Update(keyMsg("x"))
+	m, _ = next.(Model)
+
+	next, _ = m.Update(run(t, cmd))
+	m, _ = next.(Model)
+
+	view := m.View()
+
+	for _, want := range []string{"BYTES · BLOCK 2", "0000", "nothing selected"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+}
+
+// A page read for a hex view the user already closed is dropped.
+func TestModelStaleHexMsg(t *testing.T) {
+	m := loaded(t, 130, 26)
+
+	next, cmd := m.Update(keyMsg("x"))
+	m, _ = next.(Model)
+	msg := run(t, cmd)
+
+	m = press(t, m, "esc", "down")
+
+	next, _ = m.Update(msg)
+	m, _ = next.(Model)
+
+	if m.current() != viewPages || m.hex.loaded {
+		t.Errorf("a late page reopened or filled the hex view: view %v, loaded %v", m.current(), m.hex.loaded)
+	}
+}
+
+// The dump fills the panel to its last line: no blank rows below it.
+func TestModelHexFillsThePanel(t *testing.T) {
+	for _, height := range []int{20, 26, 40} {
+		m := press(t, openItemsView(t, 2, 130, height), "x")
+		lines := strings.Split(strings.TrimSuffix(m.View(), "\n"), "\n")
+
+		if len(lines) != height {
+			t.Errorf("height %d: %d lines", height, len(lines))
+		}
+
+		// The line above the bottom border is the second line of detail.
+		if above := lines[len(lines)-4]; !strings.Contains(above, "highlighted bytes") {
+			t.Errorf("height %d: the panel ends in blank lines:\n%s", height, strings.Join(lines[len(lines)-6:], "\n"))
+		}
+	}
+}

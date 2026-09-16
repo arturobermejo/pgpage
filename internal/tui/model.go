@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -49,6 +50,9 @@ type Model struct {
 	// it was opened on, and which one is selected.
 	items items
 
+	// hex is the hex view's state: the page it dumps and what is selected.
+	hex hexState
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -75,6 +79,7 @@ const (
 	viewPages view = iota // the relation: pages, page map and page header
 	viewItems             // one page: its line pointers
 	viewTuple             // one line pointer: its tuple
+	viewHex               // one page, byte by byte
 )
 
 var _ tea.Model = Model{}
@@ -123,6 +128,8 @@ func (m Model) keyMap() keyMap {
 		return itemKeys
 	case viewTuple:
 		return tupleKeys
+	case viewHex:
+		return hexKeys
 	default:
 		return keys
 	}
@@ -169,8 +176,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// and it may now show pages nobody has read yet.
 		m.top = scrollTo(m.rel.PageCount(), m.top, m.block, m.visibleRows())
 		m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
+		m.hex.vp.Width, m.hex.vp.Height = m.hexSize()
 
 		return m, m.refresh()
+
+	case hexMsg:
+		// Same guard as the line pointers: a page the user already left.
+		if msg.block != m.hex.block || m.current() != viewHex {
+			return m, nil
+		}
+
+		m = m.showHex(msg.page, msg.err)
 
 	case itemsMsg:
 		// Line pointers of a page the user already left are of no use: by
@@ -202,6 +218,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateItems(msg)
 		case viewTuple:
 			return m.updateTuple(msg)
+		case viewHex:
+			return m.updateHex(msg)
 		}
 
 		switch {
@@ -224,6 +242,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, keys.Open):
 			return m.openItems()
+
+		case key.Matches(msg, keys.Hex):
+			// Every page has bytes, a new or invalid one included: that is
+			// where looking at them helps most. Only this view has not read
+			// the page yet.
+			if m.rel.PageCount() == 0 {
+				return m, nil
+			}
+
+			m = m.openHex(m.block, nil, headerHighlight(m.summaries[m.block]))
+
+			return m, loadHex(m.rel, m.block)
 
 		case key.Matches(msg, keys.Help):
 			m.showHelp = !m.showHelp
@@ -295,6 +325,11 @@ func (m Model) updateItems(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m = m.push(viewTuple)
 		}
 
+	case key.Matches(msg, itemKeys.Hex):
+		if m.items.loaded && m.items.page != nil {
+			m = m.openHex(m.items.block, m.items.page, entryHighlight(m.items))
+		}
+
 	case key.Matches(msg, itemKeys.GoTo):
 		if len(m.items.ids) == 0 {
 			return m, nil // not read yet, or a page without line pointers
@@ -352,6 +387,9 @@ func (m Model) updateTuple(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m = m.pop()
 
+	case key.Matches(msg, tupleKeys.Hex):
+		m = m.openHex(m.items.block, m.items.page, tupleHighlight(m.items))
+
 	case key.Matches(msg, tupleKeys.Up):
 		m = m.selectTuple(m.items.selected-1, -1)
 	case key.Matches(msg, tupleKeys.Down):
@@ -360,6 +398,91 @@ func (m Model) updateTuple(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.selectTuple(0, 1)
 	case key.Matches(msg, tupleKeys.End):
 		m = m.selectTuple(len(m.items.ids)-1, -1)
+	}
+
+	return m, nil
+}
+
+// openHex opens the hex view on block with hl selected. page is nil when the
+// view that opens it has not read the page, and a hexMsg brings it later.
+func (m Model) openHex(block pgpage.BlockNumber, page []byte, hl highlight) Model {
+	m.showHelp = false
+	m = m.push(viewHex)
+	m.hex = hexState{block: block, hl: hl}
+
+	if page != nil {
+		m = m.showHex(page, nil)
+	}
+
+	return m
+}
+
+// showHex fills the hex view with a page. The whole dump goes into the
+// viewport once; scrolling only moves which lines of it are drawn.
+func (m Model) showHex(page []byte, err error) Model {
+	m.hex.loaded, m.hex.page, m.hex.err = true, page, err
+	if err != nil {
+		return m
+	}
+
+	width, height := m.hexSize()
+
+	m.hex.vp = viewport.New(width, height)
+	m.hex.vp.SetContent(strings.Join(hexLines(page, m.hex.hl), "\n"))
+
+	// Scroll so the selection starts a couple of lines below the top, with
+	// the bytes before it in view as context.
+	if m.hex.hl.start < m.hex.hl.end {
+		m.hex.vp.SetYOffset(m.hex.hl.start/pgpage.HexBytesPerLine - 2)
+	}
+
+	return m
+}
+
+// hexSize returns the size of the hex viewport: the panel less its frame
+// and the lines around the dump. The frame takes panelFrame columns but only
+// two lines, its top and bottom borders.
+func (m Model) hexSize() (width, height int) {
+	width = max(m.innerWidth()-panelFrame, 1)
+	height = max(m.bodyHeight("")-2-hexChrome, 1)
+
+	if m.height <= 0 {
+		height = defaultListRows
+	}
+
+	return width, height
+}
+
+// updateHex handles a key in the hex view: the moving keys scroll the dump,
+// and x or Esc close it.
+func (m Model) updateHex(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, hexKeys.Quit):
+		return m, tea.Quit
+
+	case key.Matches(msg, hexKeys.Help):
+		m.showHelp = !m.showHelp
+
+	case key.Matches(msg, hexKeys.Back):
+		if m.showHelp {
+			m.showHelp = false
+			break
+		}
+
+		m = m.pop()
+
+	case key.Matches(msg, hexKeys.Up):
+		m.hex.vp.ScrollUp(1)
+	case key.Matches(msg, hexKeys.Down):
+		m.hex.vp.ScrollDown(1)
+	case key.Matches(msg, hexKeys.PageUp):
+		m.hex.vp.PageUp()
+	case key.Matches(msg, hexKeys.PageDown):
+		m.hex.vp.PageDown()
+	case key.Matches(msg, hexKeys.Home):
+		m.hex.vp.GotoTop()
+	case key.Matches(msg, hexKeys.End):
+		m.hex.vp.GotoBottom()
 	}
 
 	return m, nil
@@ -503,6 +626,8 @@ func (m Model) View() string {
 		body = m.itemsBody()
 	case viewTuple:
 		body = m.tupleBody()
+	case viewHex:
+		body = m.hexBody()
 	}
 
 	if m.prompt.active {
@@ -691,6 +816,30 @@ func (m Model) tupleBody() string {
 	flags := panel("DECODED FLAGS", flagsPanel(m.items, left-panelFrame), left, height, borderStyle)
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, box, panelGap, flags)
+}
+
+// hexBody renders the hex view: one panel with the dump of the page, as wide
+// as the screen, and the selection described below it.
+func (m Model) hexBody() string {
+	title := fmt.Sprintf("BYTES · BLOCK %d", m.hex.block)
+
+	var content string
+
+	switch {
+	case !m.hex.loaded:
+		content = moreStyle.Render("reading…")
+	case m.hex.err != nil:
+		content = invalidStyle.Render(m.hex.err.Error())
+	default:
+		content = hexColumns() + "\n" + m.hex.vp.View() + "\n\n" + hexDetail(m.hex.page, m.hex.hl)
+	}
+
+	width := m.innerWidth()
+	if width <= 0 {
+		width = boxWidth(title, content)
+	}
+
+	return panel(title, content, width, m.bodyHeight(content), borderStyle)
 }
 
 // bodyHeight returns how many lines the framed panels take: everything the

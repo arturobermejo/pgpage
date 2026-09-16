@@ -42,6 +42,11 @@ var (
 	deadStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("174"))
 	redirectStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("146"))
 
+	// Bytes of the hex view: zeroes dimmed, and the selection in the colors
+	// the page map highlights it with.
+	zeroByteStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	highlightByteStyle = lipgloss.NewStyle().Background(lipgloss.Color("177")).Foreground(lipgloss.Color("234"))
+
 	// A caveat the reader should keep in mind, such as the tuple bytes that
 	// cannot be decoded without the table's schema.
 	noteStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
