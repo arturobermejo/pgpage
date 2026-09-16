@@ -383,3 +383,84 @@ func TestModelRefreshUsesTheCache(t *testing.T) {
 		}
 	}
 }
+
+// loaded returns a model of the fixture with every page already read.
+func loaded(t *testing.T, width, height int) Model {
+	t.Helper()
+
+	m := New(openFixture(t))
+	m.width, m.height = width, height
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	return m
+}
+
+// The header panel sits next to the navigator and describes the selected
+// page, not the first one.
+func TestModelBodyPanel(t *testing.T) {
+	m := loaded(t, 120, 24)
+
+	if !strings.Contains(m.View(), "PAGE HEADER") {
+		t.Fatalf("the body has no header panel:\n%s", m.View())
+	}
+
+	first := lineWith(t, m.View(), "pd_lsn")
+
+	view := press(t, m, "end").View()
+
+	if second := lineWith(t, view, "pd_lsn"); second == first {
+		t.Errorf("the panel still shows the LSN of the first page: %q", second)
+	}
+
+	// Both panels are drawn on the same lines, side by side.
+	if !strings.Contains(view, "PAGES") || !strings.Contains(view, "PAGE HEADER") {
+		t.Errorf("view after end:\n%s", view)
+	}
+}
+
+// lineWith returns the first line of the view that contains want.
+func lineWith(t *testing.T, view, want string) string {
+	t.Helper()
+
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, want) {
+			return line
+		}
+	}
+
+	t.Fatalf("no line contains %q:\n%s", want, view)
+
+	return ""
+}
+
+// A terminal too narrow for both panels keeps the navigator, which is the
+// one the keys act on.
+func TestModelBodyNarrow(t *testing.T) {
+	m := loaded(t, 40, 24)
+
+	view := m.View()
+
+	if strings.Contains(view, "PAGE HEADER") {
+		t.Errorf("the panel does not fit but was drawn:\n%s", view)
+	}
+
+	if !strings.Contains(view, "PAGES") {
+		t.Errorf("the navigator is missing:\n%s", view)
+	}
+}
+
+// Whatever the terminal, the screen never has more lines than it, which
+// would scroll it and break the drawing.
+func TestModelViewFitsTheTerminal(t *testing.T) {
+	for _, height := range []int{8, 12, 20, 24, 40} {
+		m := loaded(t, 120, height)
+
+		view := press(t, m, "end").View()
+
+		if lines := strings.Count(strings.TrimSuffix(view, "\n"), "\n") + 1; lines > height {
+			t.Errorf("height %d: the screen has %d lines:\n%s", height, lines, view)
+		}
+	}
+}

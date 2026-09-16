@@ -9,18 +9,6 @@ import (
 	"github.com/arturobermejo/pgpage"
 )
 
-// Styles of the page navigator.
-var (
-	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141"))
-	rowStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	moreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-
-	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	newStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
-	invalidStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203"))
-)
-
 // pageList renders the page navigator: the block numbers of the relation,
 // the window of rows starting at top, with selected marked and what the
 // cache knows about each page.

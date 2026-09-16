@@ -9,16 +9,6 @@ import (
 	"github.com/arturobermejo/pgpage"
 )
 
-// Styles of the top bar. Colors are ANSI 256 numbers, which every modern
-// terminal understands; Lip Gloss degrades them on terminals that cannot
-// show them, down to no color at all.
-var (
-	nameStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141"))
-	pathStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	factStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	blockStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-)
-
 // topBarGap is the smallest number of spaces between the two sides of the
 // top bar. With less room than that, the right side is dropped.
 const topBarGap = 2

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arturobermejo/pgpage"
 )
@@ -180,11 +181,48 @@ func (m Model) View() string {
 	return strings.Join([]string{
 		topBar(m.rel, m.block, m.width),
 		"",
-		pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries),
+		m.body(),
 		"",
 		helpLine,
 	}, "\n") + "\n"
 }
+
+// panelGap separates the panels of the body.
+const panelGap = "   "
+
+// body renders the panels side by side, and only the navigator when the
+// terminal is too narrow to hold both.
+func (m Model) body() string {
+	list := pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries)
+
+	summary, cached := m.summaries[m.block]
+	if m.rel.PageCount() == 0 {
+		return list
+	}
+
+	panel := headerPanel(summary, cached)
+
+	width := lipgloss.Width(list) + lipgloss.Width(panelGap) + lipgloss.Width(panel)
+	if m.width > 0 && width > m.width {
+		return list
+	}
+
+	// Top aligns the panels: they have different heights, and both must
+	// start on the same line.
+	body := lipgloss.JoinHorizontal(lipgloss.Top, list, panelGap, panel)
+
+	if m.height > 0 {
+		// The panel can be taller than the navigator, and a body taller than
+		// the terminal would scroll the screen and break the drawing.
+		body = lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(body)
+	}
+
+	return body
+}
+
+// bodyChrome is the number of lines around the body: the top bar, the help
+// line and the blank line before each.
+const bodyChrome = 4
 
 // helpLine is the reminder at the bottom of the screen. Step 26 replaces it
 // with a real help component.
