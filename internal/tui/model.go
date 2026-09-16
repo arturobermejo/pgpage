@@ -217,6 +217,25 @@ func (m Model) body() string {
 	panels := []string{list}
 	left := m.width - lipgloss.Width(list) - lipgloss.Width(panelGap)
 
+	if m.width <= 0 {
+		left = defaultDetailWidth
+	}
+
+	// A page with no layout gets a panel of its own instead of a map and a
+	// header full of dashes.
+	if cached && summary.Status != pgpage.StatusOK {
+		if left < minStatusWidth {
+			return list
+		}
+
+		// Sentences are read line by line: past some length the eye loses
+		// the start of the next one, so the panel does not take the whole
+		// terminal however wide it is.
+		panel := statusPanel(m.block, summary, min(left, maxStatusWidth))
+
+		return m.clip(lipgloss.JoinHorizontal(lipgloss.Top, list, panelGap, panel))
+	}
+
 	if header := headerPanel(summary, cached); m.width <= 0 || lipgloss.Width(header) <= left {
 		// The map takes what the other two panels leave: it is the one that
 		// can be drawn at any width.
@@ -227,15 +246,21 @@ func (m Model) body() string {
 		panels = append(panels, header)
 	}
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
+	return m.clip(lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...))
+}
 
-	if m.height > 0 {
-		// A panel can be taller than the navigator, and a body taller than
-		// the terminal would scroll the screen and break the drawing.
-		body = lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(body)
+// defaultDetailWidth is how wide the panels beside the navigator may be
+// while the terminal size is unknown.
+const defaultDetailWidth = 60
+
+// clip cuts a body taller than the terminal, which would otherwise scroll
+// the screen and break the drawing.
+func (m Model) clip(body string) string {
+	if m.height <= 0 {
+		return body
 	}
 
-	return body
+	return lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(body)
 }
 
 // join returns the blocks with sep between each pair, ready for

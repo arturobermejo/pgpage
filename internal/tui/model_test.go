@@ -513,3 +513,102 @@ func TestModelBodyMapFollowsSelection(t *testing.T) {
 		t.Errorf("the map still shows another page:\n%s", view)
 	}
 }
+
+// openMixed opens a relation whose three pages are one valid page, one new
+// page and one with a corrupt header.
+func openMixed(t *testing.T) *pgpage.Relation {
+	t.Helper()
+
+	bad := make([]byte, pgpage.PageSize)
+	bad[12], bad[13] = 0xF4, 0x01 // pd_lower = 500
+	bad[14], bad[15] = 0x64, 0x00 // pd_upper = 100
+	bad[16], bad[17] = 0x00, 0x20 // pd_special = 8192
+	bad[18], bad[19] = 0x04, 0x20 // page size 8192, layout version 4
+
+	data := fixturePage(t, 0)
+	data = append(data, make([]byte, pgpage.PageSize)...)
+	data = append(data, bad...)
+
+	path := filepath.Join(t.TempDir(), "mixed")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := pgpage.OpenRelation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { rel.Close() })
+
+	return rel
+}
+
+// A page without a layout replaces the map and the header panel with one
+// panel that explains it.
+func TestModelBodyStatusPanel(t *testing.T) {
+	m := New(openMixed(t))
+	m.width, m.height = 120, 22
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	tests := []struct {
+		name string
+		keys []string
+		want []string
+		gone []string
+	}{
+		{
+			name: "valid page",
+			want: []string{"PAGE 0 — 8192 BYTES", "PAGE HEADER"},
+			gone: []string{"NEW PAGE", "⚠"},
+		},
+		{
+			name: "new page",
+			keys: []string{"down"},
+			want: []string{"PAGE 1", "NEW PAGE", "all zeroes"},
+			gone: []string{"PAGE HEADER", "BYTES", "⚠"},
+		},
+		{
+			name: "invalid page",
+			keys: []string{"end"},
+			want: []string{"BLOCK 2", "⚠ Invalid page header", "lower=500 upper=100"},
+			gone: []string{"PAGE HEADER", "BYTES", "NEW PAGE"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := press(t, m, tt.keys...).View()
+
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Errorf("view does not contain %q:\n%s", want, view)
+				}
+			}
+
+			for _, gone := range tt.gone {
+				if strings.Contains(view, gone) {
+					t.Errorf("view contains %q:\n%s", gone, view)
+				}
+			}
+		})
+	}
+}
+
+// The navigator still works on pages that cannot be parsed: they are where
+// the user most needs to move around.
+func TestModelNavigatesBrokenPages(t *testing.T) {
+	m := New(openMixed(t))
+	m.width, m.height = 120, 22
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	m = press(t, m, "end", "up", "up")
+
+	if m.block != 0 {
+		t.Errorf("block = %d after walking back from a broken page, want 0", m.block)
+	}
+}
