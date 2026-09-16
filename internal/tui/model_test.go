@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/arturobermejo/pgpage"
 )
@@ -462,5 +463,53 @@ func TestModelViewFitsTheTerminal(t *testing.T) {
 		if lines := strings.Count(strings.TrimSuffix(view, "\n"), "\n") + 1; lines > height {
 			t.Errorf("height %d: the screen has %d lines:\n%s", height, lines, view)
 		}
+	}
+}
+
+// The page map sits between the navigator and the header panel when there
+// is room for the three, and is the first panel dropped when there is not.
+func TestModelBodyMap(t *testing.T) {
+	tests := []struct {
+		name  string
+		width int
+		want  []string
+		gone  []string
+	}{
+		{name: "three panels", width: 140, want: []string{"PAGES", "PAGE 0 — 8192 BYTES", "PAGE HEADER"}},
+		{name: "no room for the map", width: 70, want: []string{"PAGES", "PAGE HEADER"}, gone: []string{"BYTES"}},
+		{name: "only the navigator", width: 40, want: []string{"PAGES"}, gone: []string{"BYTES", "PAGE HEADER"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			view := loaded(t, tt.width, 24).View()
+
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Errorf("view does not contain %q:\n%s", want, view)
+				}
+			}
+
+			for _, gone := range tt.gone {
+				if strings.Contains(view, gone) {
+					t.Errorf("view contains %q, which does not fit:\n%s", gone, view)
+				}
+			}
+
+			for _, line := range strings.Split(view, "\n") {
+				if got := lipgloss.Width(line); got > tt.width {
+					t.Fatalf("a line is %d cells wide, the terminal is %d:\n%q", got, tt.width, line)
+				}
+			}
+		})
+	}
+}
+
+// The map follows the selection, like the header panel.
+func TestModelBodyMapFollowsSelection(t *testing.T) {
+	view := press(t, loaded(t, 140, 24), "end").View()
+
+	if !strings.Contains(view, "PAGE 2 — 8192 BYTES") {
+		t.Errorf("the map still shows another page:\n%s", view)
 	}
 }

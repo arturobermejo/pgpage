@@ -178,20 +178,34 @@ func (m Model) visibleRows() int {
 // View returns the whole screen as text. It must not change the model nor
 // read anything but it: Bubble Tea may call it after any message.
 func (m Model) View() string {
-	return strings.Join([]string{
+	screen := strings.Join([]string{
 		topBar(m.rel, m.block, m.width),
 		"",
 		m.body(),
 		"",
 		helpLine,
-	}, "\n") + "\n"
+	}, "\n")
+
+	if m.width > 0 {
+		// The last word on the size of the screen: a line wider than the
+		// terminal would wrap and push everything below it down. Panels are
+		// laid out to fit, but fixed text such as the help line is not.
+		screen = lipgloss.NewStyle().MaxWidth(m.width).Render(screen)
+	}
+
+	return screen + "\n"
 }
 
 // panelGap separates the panels of the body.
 const panelGap = "   "
 
-// body renders the panels side by side, and only the navigator when the
-// terminal is too narrow to hold both.
+// minMapWidth is the narrowest page map worth drawing. Below it the bar
+// cannot tell the regions apart and the legend does not fit.
+const minMapWidth = 28
+
+// body renders the panels side by side: the navigator, the page map and the
+// page header. Panels are dropped, widest first, when the terminal cannot
+// hold them; the navigator is the one the keys act on, so it always stays.
 func (m Model) body() string {
 	list := pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries)
 
@@ -200,24 +214,44 @@ func (m Model) body() string {
 		return list
 	}
 
-	panel := headerPanel(summary, cached)
+	panels := []string{list}
+	left := m.width - lipgloss.Width(list) - lipgloss.Width(panelGap)
 
-	width := lipgloss.Width(list) + lipgloss.Width(panelGap) + lipgloss.Width(panel)
-	if m.width > 0 && width > m.width {
-		return list
+	if header := headerPanel(summary, cached); m.width <= 0 || lipgloss.Width(header) <= left {
+		// The map takes what the other two panels leave: it is the one that
+		// can be drawn at any width.
+		if mapWidth := left - lipgloss.Width(header) - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
+			panels = append(panels, pageMap(m.block, summary, cached, mapWidth))
+		}
+
+		panels = append(panels, header)
 	}
 
-	// Top aligns the panels: they have different heights, and both must
-	// start on the same line.
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, panelGap, panel)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
 
 	if m.height > 0 {
-		// The panel can be taller than the navigator, and a body taller than
+		// A panel can be taller than the navigator, and a body taller than
 		// the terminal would scroll the screen and break the drawing.
 		body = lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(body)
 	}
 
 	return body
+}
+
+// join returns the blocks with sep between each pair, ready for
+// JoinHorizontal, which takes the blocks as separate arguments.
+func join(blocks []string, sep string) []string {
+	out := make([]string, 0, 2*len(blocks)-1)
+
+	for i, block := range blocks {
+		if i > 0 {
+			out = append(out, sep)
+		}
+
+		out = append(out, block)
+	}
+
+	return out
 }
 
 // bodyChrome is the number of lines around the body: the top bar, the help

@@ -24,6 +24,13 @@ var (
 	numberStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("180"))
 	moreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
+	// Regions of the page map.
+	headerRegionStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
+	itemsRegionStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("180"))
+	freeRegionStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	tuplesRegionStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
+	specialRegionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("141"))
+
 	// Page status.
 	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
 	newStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("81"))
