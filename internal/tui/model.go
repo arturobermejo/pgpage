@@ -10,6 +10,8 @@ import (
 	"io"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -29,6 +31,11 @@ type Model struct {
 	// reference, so every copy of the Model shares this one; that is what
 	// makes it a cache and not a snapshot, and why only Update writes to it.
 	summaries summaryCache
+
+	// help draws the key bindings, and showHelp says whether the full list
+	// has taken over the screen.
+	help     help.Model
+	showHelp bool
 
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
@@ -54,7 +61,7 @@ var _ tea.Model = Model{}
 // New returns the model of an explorer on rel, which the caller must keep
 // open until Run returns.
 func New(rel *pgpage.Relation) Model {
-	return Model{rel: rel, summaries: summaryCache{}}
+	return Model{rel: rel, summaries: summaryCache{}, help: help.New()}
 }
 
 // Init returns the command to run before the first View: reading the pages
@@ -89,6 +96,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The size is state like any other: it arrives as a message and the
 		// views read it from the model when they are drawn.
 		m.width, m.height = msg.Width, msg.Height
+		m.help.Width = msg.Width
 
 		// A window of a different height holds a different number of rows,
 		// so the navigator may have to scroll to keep showing the selection,
@@ -105,23 +113,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "esc", "ctrl+c":
+		switch {
+		case key.Matches(msg, keys.Quit):
 			// tea.Quit is a command, not an action: returning it asks the
 			// runtime to stop after this update.
 			return m, tea.Quit
 
-		case "up", "k":
+		case key.Matches(msg, keys.Help):
+			m.showHelp = !m.showHelp
+
+		case key.Matches(msg, keys.Back):
+			// Back closes the help; at the top level there is nothing else
+			// to go back to, so it quits.
+			if !m.showHelp {
+				return m, tea.Quit
+			}
+
+			m.showHelp = false
+
+		case key.Matches(msg, keys.Up):
 			m = m.move(-1)
-		case "down", "j":
+		case key.Matches(msg, keys.Down):
 			m = m.move(1)
-		case "pgup":
+		case key.Matches(msg, keys.PageUp):
 			m = m.move(-m.visibleRows())
-		case "pgdown":
+		case key.Matches(msg, keys.PageDown):
 			m = m.move(m.visibleRows())
-		case "home":
+		case key.Matches(msg, keys.Home):
 			m = m.selectBlock(0)
-		case "end":
+		case key.Matches(msg, keys.End):
 			m = m.selectBlock(int64(m.rel.PageCount()) - 1)
 		default:
 			return m, nil
@@ -178,12 +198,19 @@ func (m Model) visibleRows() int {
 // View returns the whole screen as text. It must not change the model nor
 // read anything but it: Bubble Tea may call it after any message.
 func (m Model) View() string {
+	body, footer := m.body(), m.help.ShortHelpView(keys.ShortHelp())
+
+	if m.showHelp {
+		body = m.clip(helpScreen(m.help, keys))
+		footer = m.help.ShortHelpView([]key.Binding{keys.Help, keys.Back})
+	}
+
 	screen := strings.Join([]string{
 		topBar(m.rel, m.block, m.width),
 		"",
-		m.body(),
+		body,
 		"",
-		helpLine,
+		footer,
 	}, "\n")
 
 	if m.width > 0 {
@@ -282,10 +309,6 @@ func join(blocks []string, sep string) []string {
 // bodyChrome is the number of lines around the body: the top bar, the help
 // line and the blank line before each.
 const bodyChrome = 4
-
-// helpLine is the reminder at the bottom of the screen. Step 26 replaces it
-// with a real help component.
-const helpLine = "↑↓/jk page · PgUp/PgDn · Home/End · q quit"
 
 // Run starts the explorer on rel and blocks until the user quits. It reads
 // keys from in and draws on out, which is the terminal in practice.

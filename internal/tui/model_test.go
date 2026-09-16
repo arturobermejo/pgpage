@@ -71,7 +71,9 @@ func TestModelView(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{fixtureHeap, "3 pages", "24.0 KB", "blk 0/2", "PAGES", "> 0", "q quit"} {
+	// The bottom line is cut to the width of the terminal, so it may not
+	// show every key.
+	for _, want := range []string{fixtureHeap, "3 pages", "24.0 KB", "blk 0/2", "PAGES", "> 0", "next page"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -205,9 +207,9 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// key returns the message Bubble Tea sends for a key name, the same names
-// Update matches on.
-func key(name string) tea.KeyMsg {
+// keyMsg returns the message Bubble Tea sends for a key name, the same names
+// the bindings are declared with.
+func keyMsg(name string) tea.KeyMsg {
 	types := map[string]tea.KeyType{
 		"up":     tea.KeyUp,
 		"down":   tea.KeyDown,
@@ -217,8 +219,8 @@ func key(name string) tea.KeyMsg {
 		"end":    tea.KeyEnd,
 	}
 
-	if t, ok := types[name]; ok {
-		return tea.KeyMsg{Type: t}
+	if kind, ok := types[name]; ok {
+		return tea.KeyMsg{Type: kind}
 	}
 
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
@@ -229,7 +231,7 @@ func press(t *testing.T, m Model, keys ...string) Model {
 	t.Helper()
 
 	for _, name := range keys {
-		next, _ := m.Update(key(name))
+		next, _ := m.Update(keyMsg(name))
 
 		m, _ = next.(Model)
 	}
@@ -610,5 +612,85 @@ func TestModelNavigatesBrokenPages(t *testing.T) {
 
 	if m.block != 0 {
 		t.Errorf("block = %d after walking back from a broken page, want 0", m.block)
+	}
+}
+
+// The bottom line names the keys that move around, and ? opens the list of
+// all of them in place of the panels.
+func TestModelHelp(t *testing.T) {
+	m := loaded(t, 110, 20)
+
+	view := m.View()
+
+	for _, want := range []string{"next page", "q quit", "PAGES"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+
+	if strings.Contains(view, "KEYS") {
+		t.Errorf("the help screen is open before pressing ?:\n%s", view)
+	}
+
+	open := press(t, m, "?")
+
+	view = open.View()
+
+	for _, want := range []string{"KEYS", "one screen up", "close the help", "read-only"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("help screen does not contain %q:\n%s", want, view)
+		}
+	}
+
+	for _, gone := range []string{"PAGES", "PAGE HEADER"} {
+		if strings.Contains(view, gone) {
+			t.Errorf("the help screen still shows %q:\n%s", gone, view)
+		}
+	}
+
+	if !strings.Contains(press(t, open, "?").View(), "PAGES") {
+		t.Error("? did not close the help screen")
+	}
+
+	if !strings.Contains(press(t, open, "esc").View(), "PAGES") {
+		t.Error("esc did not close the help screen")
+	}
+}
+
+// Esc closes the help when it is open, and quits when it is not.
+func TestModelEscape(t *testing.T) {
+	m := loaded(t, 110, 20)
+
+	_, cmd := m.Update(keyMsg("esc"))
+	if !isQuit(cmd) {
+		t.Error("esc did not quit with the help closed")
+	}
+
+	next, cmd := press(t, m, "?").Update(keyMsg("esc"))
+	if isQuit(cmd) {
+		t.Error("esc quit with the help open, instead of closing it")
+	}
+
+	if open, _ := next.(Model); open.showHelp {
+		t.Error("esc left the help open")
+	}
+}
+
+// The help screen obeys the size of the terminal like everything else.
+func TestModelHelpFitsTheTerminal(t *testing.T) {
+	for _, size := range [][2]int{{110, 20}, {80, 12}, {60, 9}, {40, 8}} {
+		view := press(t, loaded(t, size[0], size[1]), "?").View()
+
+		lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+
+		if len(lines) > size[1] {
+			t.Errorf("%dx%d: the screen has %d lines:\n%s", size[0], size[1], len(lines), view)
+		}
+
+		for _, line := range lines {
+			if got := lipgloss.Width(line); got > size[0] {
+				t.Errorf("%dx%d: a line is %d cells wide:\n%q", size[0], size[1], got, line)
+			}
+		}
 	}
 }
