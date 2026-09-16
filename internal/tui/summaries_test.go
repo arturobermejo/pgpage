@@ -99,7 +99,7 @@ func TestMissingRange(t *testing.T) {
 // The columns say what each page holds, and dashes stand for what a page
 // without a valid header cannot tell.
 func TestSummaryColumns(t *testing.T) {
-	okPage := pgpage.SummarizePage(fixturePage(t, 0))
+	okPage := pgpage.SummarizePage(fixturePage(t, 0), 0)
 
 	tests := []struct {
 		name    string
@@ -111,7 +111,7 @@ func TestSummaryColumns(t *testing.T) {
 		{name: "valid page", summary: okPage, cached: true, want: []string{"185 items", "21% free", "OK"}},
 		{
 			name:    "new page",
-			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize)),
+			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 			cached:  true,
 			want:    []string{"0 items", "—", "NEW"},
 		},
@@ -146,8 +146,8 @@ func TestSummaryColumns(t *testing.T) {
 // bytes long and one cell wide, which byte padding gets wrong.
 func TestSummaryColumnsAlign(t *testing.T) {
 	summaries := []pgpage.PageSummary{
-		pgpage.SummarizePage(fixturePage(t, 0)),
-		pgpage.SummarizePage(make([]byte, pgpage.PageSize)),
+		pgpage.SummarizePage(fixturePage(t, 0), 0),
+		pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 		{Status: pgpage.StatusInvalid, Err: errors.New("boom")},
 	}
 

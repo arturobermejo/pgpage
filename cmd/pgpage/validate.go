@@ -47,16 +47,17 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 
 // validationReport counts what a scan of a relation found.
 type validationReport struct {
-	pages    int
-	statuses map[pgpage.PageStatus]int // pages by status
-	items    int                       // invalid line pointers or tuple headers
-	trailing int64                     // bytes of a partial last page
+	pages     int
+	statuses  map[pgpage.PageStatus]int // pages by status
+	items     int                       // invalid line pointers or tuple headers
+	checksums int                       // pages whose checksum does not match
+	trailing  int64                     // bytes of a partial last page
 }
 
 // problems returns the number of problems found, where a partial last page
 // counts as one.
 func (r validationReport) problems() int {
-	n := r.statuses[pgpage.StatusInvalid] + r.items
+	n := r.statuses[pgpage.StatusInvalid] + r.items + r.checksums
 	if r.trailing > 0 {
 		n++
 	}
@@ -65,10 +66,11 @@ func (r validationReport) problems() int {
 }
 
 // String formats the summary line, for example
-// "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items".
+// "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums".
 func (r validationReport) String() string {
-	return fmt.Sprintf("scanned %d pages: %d OK, %d NEW, %d INVALID, %d invalid items",
-		r.pages, r.statuses[pgpage.StatusOK], r.statuses[pgpage.StatusNew], r.statuses[pgpage.StatusInvalid], r.items)
+	return fmt.Sprintf("scanned %d pages: %d OK, %d NEW, %d INVALID, %d invalid items, %d bad checksums",
+		r.pages, r.statuses[pgpage.StatusOK], r.statuses[pgpage.StatusNew], r.statuses[pgpage.StatusInvalid],
+		r.items, r.checksums)
 }
 
 // validateRelation checks every page of rel as a heap relation, writing a
@@ -85,7 +87,7 @@ func validateRelation(rel *pgpage.Relation, w io.Writer) (validationReport, erro
 
 		report.pages++
 
-		summary := pgpage.SummarizePage(buf)
+		summary := pgpage.SummarizePage(buf, block)
 		report.statuses[summary.Status]++
 
 		if summary.Status != pgpage.StatusOK {
@@ -94,6 +96,15 @@ func validateRelation(rel *pgpage.Relation, w io.Writer) (validationReport, erro
 			}
 
 			continue
+		}
+
+		// A page written with checksums off is not a problem; only a stored
+		// checksum that disagrees with the bytes is.
+		if summary.Checksum == pgpage.ChecksumMismatch {
+			fmt.Fprintf(w, "block %d: checksum mismatch: stored %d, computed %d\n",
+				block, summary.Header.Checksum, summary.ComputedChecksum)
+
+			report.checksums++
 		}
 
 		report.items += validateItems(w, block, buf, summary.Header)

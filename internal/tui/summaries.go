@@ -39,7 +39,7 @@ func loadSummaries(rel *pgpage.Relation, first, last pgpage.BlockNumber) tea.Cmd
 				continue
 			}
 
-			summaries[block] = pgpage.SummarizePage(buf)
+			summaries[block] = pgpage.SummarizePage(buf, block)
 		}
 
 		return summariesMsg{summaries: summaries}

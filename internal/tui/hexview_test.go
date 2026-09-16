@@ -142,11 +142,11 @@ func TestHexHighlights(t *testing.T) {
 	it := fixtureItems(t, 2)
 	it.selected = selectedTuple2
 
-	if got := headerHighlight(pgpage.SummarizePage(fixturePage(t, 0))); got != (highlight{end: 24, label: "page header"}) {
+	if got := headerHighlight(pgpage.SummarizePage(fixturePage(t, 0), 0)); got != (highlight{end: 24, label: "page header"}) {
 		t.Errorf("header highlight = %+v", got)
 	}
 
-	if got := headerHighlight(pgpage.SummarizePage(make([]byte, pgpage.PageSize))); got.start < got.end {
+	if got := headerHighlight(pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0)); got.start < got.end {
 		t.Errorf("a new page highlights a header it does not have: %+v", got)
 	}
 

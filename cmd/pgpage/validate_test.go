@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/arturobermejo/pgpage"
 )
 
 func TestValidateFixture(t *testing.T) {
@@ -14,7 +17,7 @@ func TestValidateFixture(t *testing.T) {
 		t.Fatalf("exit code %d, want %d (stderr: %s)", code, exitOK, stderr)
 	}
 
-	if want := "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items\n"; stdout != want {
+	if want := "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
@@ -26,7 +29,7 @@ func TestValidateEmptyFile(t *testing.T) {
 		t.Errorf("exit code %d, want %d", code, exitOK)
 	}
 
-	if want := "scanned 0 pages: 0 OK, 0 NEW, 0 INVALID, 0 invalid items\n"; stdout != want {
+	if want := "scanned 0 pages: 0 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
@@ -55,12 +58,16 @@ func TestValidateProblems(t *testing.T) {
 
 	relation = append(relation, make([]byte, 100)...) // a torn sixth page
 
-	const want = `block 2: pgpage: invalid page boundaries: lower=500 upper=100 special=8192: invalid page header
+	// Blocks 3 and 4 hold the fixture's block 0 damaged and in another
+	// place, so their stored checksum, 6769, matches neither.
+	want := fmt.Sprintf(`block 2: pgpage: invalid page boundaries: lower=500 upper=100 special=8192: invalid page header
+block 3: checksum mismatch: stored 6769, computed %d
 block 3: pgpage: line pointer 1 offset 8153 is not aligned to 8: invalid line pointer
+block 4: checksum mismatch: stored 6769, computed %d
 block 4: pgpage: line pointer 1: pgpage: t_hoff 16 is not an aligned offset between 23 and the tuple length 35: invalid heap tuple header
 block 5: partial page of 100 bytes
-scanned 5 pages: 3 OK, 1 NEW, 1 INVALID, 2 invalid items
-`
+scanned 5 pages: 3 OK, 1 NEW, 1 INVALID, 2 invalid items, 2 bad checksums
+`, pgpage.PageChecksum(badItem, 3), pgpage.PageChecksum(badTuple, 4))
 
 	code, stdout, stderr := runCommand("validate", writePage(t, relation))
 

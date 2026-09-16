@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ import (
 // The panel shows the stored fields with the values PostgreSQL wrote, and
 // the values derived from them.
 func TestHeaderPanel(t *testing.T) {
-	panel := headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true)
+	panel := headerPanel(pgpage.SummarizePage(fixturePage(t, 0), 0), true)
 
 	// Same numbers page_header() reports for block 0 of the fixture.
 	fields := map[string]string{
@@ -29,6 +30,7 @@ func TestHeaderPanel(t *testing.T) {
 		"items":          "185",
 		"free space":     "1708 B",
 		"free":           "21 %",
+		"checksum":       "OK",
 		"flags decoded":  "—",
 		"status":         "OK",
 	}
@@ -68,7 +70,7 @@ func splitField(line string) (name, value string, ok bool) {
 // Values start at the same column whatever the name, which is what makes
 // the panel readable.
 func TestHeaderPanelAligns(t *testing.T) {
-	panel := headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true)
+	panel := headerPanel(pgpage.SummarizePage(fixturePage(t, 0), 0), true)
 
 	for _, line := range strings.Split(panel, "\n") {
 		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, borderHorizontal) {
@@ -108,7 +110,7 @@ func TestHeaderPanelNotOK(t *testing.T) {
 		},
 		{
 			name:    "new page",
-			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize)),
+			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 			cached:  true,
 			want:    []string{"status", "NEW"},
 			absent:  []string{"pd_lsn", "free space"},
@@ -166,7 +168,7 @@ func TestPageFlagNames(t *testing.T) {
 // Each flag of a page goes on a line of its own, lined up under the first
 // one, so that the panel stays narrow.
 func TestHeaderPanelFlagsOnePerLine(t *testing.T) {
-	summary := withFlags(pgpage.SummarizePage(fixturePage(t, 0)),
+	summary := withFlags(pgpage.SummarizePage(fixturePage(t, 0), 0),
 		pgpage.PageHasFreeLines|pgpage.PageFull|pgpage.PageAllVisible)
 
 	lines := strings.Split(headerPanel(summary, true), "\n")
@@ -201,7 +203,7 @@ func TestHeaderPanelFlagsOnePerLine(t *testing.T) {
 
 // The stored fields and the derived ones are separated by a rule.
 func TestHeaderPanelRule(t *testing.T) {
-	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true), "\n")
+	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0), 0), true), "\n")
 
 	var rule, before, after int
 
@@ -227,7 +229,7 @@ func TestHeaderPanelRule(t *testing.T) {
 func TestHeaderPanelColors(t *testing.T) {
 	withColor(t)
 
-	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true), "\n")
+	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0), 0), true), "\n")
 
 	colors := map[string]string{
 		"pd_lower": "38;5;109", // line pointers
@@ -258,16 +260,20 @@ func TestHeaderPanelColors(t *testing.T) {
 // The header panel is as wide on a page with every flag set as on a page
 // with none, so moving the selection does not resize the panels around it.
 func TestHeaderBoxWidthIsStable(t *testing.T) {
-	plain := pgpage.SummarizePage(fixturePage(t, 0))
+	plain := pgpage.SummarizePage(fixturePage(t, 0), 0)
 
 	flagged := plain
 	flagged.Header.Flags = pgpage.PageHasFreeLines | pgpage.PageFull | pgpage.PageAllVisible
+
+	mismatch := plain
+	mismatch.Checksum, mismatch.ComputedChecksum = pgpage.ChecksumMismatch, math.MaxUint16
 
 	contents := map[string]string{
 		"no flags":      headerPanel(plain, true),
 		"every flag":    headerPanel(flagged, true),
 		"not read yet":  headerPanel(pgpage.PageSummary{}, false),
 		"one flag only": headerPanel(withFlags(plain, pgpage.PageAllVisible), true),
+		"bad checksum":  headerPanel(mismatch, true),
 	}
 
 	want := headerBoxWidth(contents["no flags"])
@@ -280,6 +286,38 @@ func TestHeaderBoxWidthIsStable(t *testing.T) {
 		if lipgloss.Width(content)+panelFrame > want {
 			t.Errorf("%s: content is wider than the box:\n%s", name, content)
 		}
+	}
+}
+
+// The checksum row says whether the page matches its pd_checksum. A
+// mismatch shows the checksum the bytes give on the line below, as the
+// flags are listed, so that the panel keeps its width.
+func TestHeaderPanelChecksum(t *testing.T) {
+	summary := pgpage.SummarizePage(fixturePage(t, 0), 0)
+
+	tests := []struct {
+		name     string
+		checksum pgpage.ChecksumStatus
+		computed uint16
+		want     []string
+	}{
+		{name: "matches", checksum: pgpage.ChecksumOK, want: []string{"checksum        OK"}},
+		{name: "mismatch", checksum: pgpage.ChecksumMismatch, computed: 4242, want: []string{"checksum        MISMATCH", "                computed 4242"}},
+		{name: "disabled", checksum: pgpage.ChecksumDisabled, want: []string{"checksum        DISABLED"}},
+		{name: "not verified", want: []string{"checksum        —"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			summary.Checksum, summary.ComputedChecksum = tt.checksum, tt.computed
+			panel := headerPanel(summary, true)
+
+			for _, want := range tt.want {
+				if !strings.Contains(panel, want) {
+					t.Errorf("panel does not contain %q:\n%s", want, panel)
+				}
+			}
+		})
 	}
 }
 

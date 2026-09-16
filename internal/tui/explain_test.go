@@ -140,7 +140,7 @@ func TestExplainSteps(t *testing.T) {
 // The list shows the fields of the header with their values, the selected
 // one marked, and below a rule what the header panel derives from them.
 func TestExplainList(t *testing.T) {
-	summary := pgpage.SummarizePage(fixturePage(t, 2))
+	summary := pgpage.SummarizePage(fixturePage(t, 2), 2)
 	list := explainList(summary, explainLower)
 	lines := strings.Split(list, "\n")
 

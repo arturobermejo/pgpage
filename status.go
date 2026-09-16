@@ -63,18 +63,32 @@ type PageSummary struct {
 	// Err explains why the page could not be decoded, and is nil when
 	// Status is StatusOK or StatusNew.
 	Err error
+	// Checksum says whether pd_checksum matches the page. It is verified
+	// only when Status is StatusOK: PostgreSQL does not checksum new pages,
+	// and a page without a valid header has nothing to compare.
+	Checksum ChecksumStatus
+	// ComputedChecksum is the checksum of the page's bytes, what pd_checksum
+	// should hold when Checksum is ChecksumMismatch.
+	ComputedChecksum uint16
 }
 
-// SummarizePage decodes the header of page and classifies it. It never
-// fails: a page that cannot be decoded is reported through Status and Err.
-func SummarizePage(page []byte) PageSummary {
+// SummarizePage decodes the header of page, read as block, classifies it,
+// and verifies its checksum. It never fails: a page that cannot be decoded
+// is reported through Status and Err.
+func SummarizePage(page []byte, block BlockNumber) PageSummary {
 	h, err := ParsePageHeader(page)
 
-	return PageSummary{
+	s := PageSummary{
 		Header: h,
 		Status: PageStatusOf(h, err),
 		Err:    err,
 	}
+
+	if s.Status == StatusOK {
+		s.Checksum, s.ComputedChecksum = VerifyChecksum(page, block)
+	}
+
+	return s
 }
 
 // FreeSpacePercent returns the free space between pd_lower and pd_upper as

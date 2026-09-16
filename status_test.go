@@ -71,7 +71,7 @@ func TestPageStatusOfWrappedError(t *testing.T) {
 }
 
 func TestSummarizePage(t *testing.T) {
-	summary := SummarizePage(makePage(devPage))
+	summary := SummarizePage(makePage(devPage), 0)
 
 	if summary.Status != StatusOK || summary.Err != nil {
 		t.Fatalf("SummarizePage = %v, %v; want %v, nil", summary.Status, summary.Err, StatusOK)
@@ -86,6 +86,25 @@ func TestSummarizePage(t *testing.T) {
 	percent, ok := summary.FreeSpacePercent()
 	if !ok || percent != 98.92578125 {
 		t.Errorf("FreeSpacePercent() = %v, %v; want 98.92578125, true", percent, ok)
+	}
+
+	// devPage stores a checksum that was not computed from these bytes.
+	if summary.Checksum != ChecksumMismatch || summary.ComputedChecksum == devPage.Checksum {
+		t.Errorf("Checksum = %v, computed %d; want %v and a checksum other than %d",
+			summary.Checksum, summary.ComputedChecksum, ChecksumMismatch, devPage.Checksum)
+	}
+}
+
+// A page PostgreSQL wrote verifies at its own block and nowhere else.
+func TestSummarizePageChecksum(t *testing.T) {
+	page := fixturePages(t)[1]
+
+	if s := SummarizePage(page, 1); s.Checksum != ChecksumOK || s.ComputedChecksum != s.Header.Checksum {
+		t.Errorf("at block 1: Checksum = %v, computed %d, stored %d; want OK", s.Checksum, s.ComputedChecksum, s.Header.Checksum)
+	}
+
+	if s := SummarizePage(page, 2); s.Checksum != ChecksumMismatch {
+		t.Errorf("at block 2: Checksum = %v, want %v", s.Checksum, ChecksumMismatch)
 	}
 }
 
@@ -107,7 +126,7 @@ func TestSummarizePageNotOK(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			summary := SummarizePage(tt.page)
+			summary := SummarizePage(tt.page, 0)
 
 			if summary.Status != tt.status {
 				t.Errorf("Status = %v, want %v", summary.Status, tt.status)
@@ -127,6 +146,11 @@ func TestSummarizePageNotOK(t *testing.T) {
 
 			if percent, ok := summary.FreeSpacePercent(); ok {
 				t.Errorf("FreeSpacePercent() = %v, true; want ok = false", percent)
+			}
+
+			// Only a page with a valid header has a checksum to verify.
+			if summary.Checksum != ChecksumUnknown {
+				t.Errorf("Checksum = %v, want %v", summary.Checksum, ChecksumUnknown)
 			}
 		})
 	}

@@ -40,7 +40,7 @@ func mapLines(t *testing.T, m string) []string {
 func TestPageMapGrid(t *testing.T) {
 	const width = 70
 
-	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, width)
+	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, width)
 
 	for i, line := range mapLines(t, m) {
 		label := fmt.Sprintf("0x%04X", i*bytesPerRow)
@@ -62,7 +62,7 @@ func TestPageMapGrid(t *testing.T) {
 // Every region of the page is drawn, including the 24-byte header: a grid
 // cell covers a handful of bytes, so nothing is rounded away.
 func TestPageMapShowsEveryRegion(t *testing.T) {
-	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, 70)
+	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 70)
 
 	grid := strings.Join(mapLines(t, m), "\n")
 
@@ -114,7 +114,7 @@ func TestCellRegion(t *testing.T) {
 // The legend names every region that has bytes, with its range, and leaves
 // out the ones that have none.
 func TestPageMapLegend(t *testing.T) {
-	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, 70)
+	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 70)
 
 	for _, want := range []string{
 		"Header 0-23 · 24 B",
@@ -162,7 +162,7 @@ func TestPageMapNoLayout(t *testing.T) {
 		{name: "not read yet", width: 70, want: "reading…"},
 		{
 			name:    "new page",
-			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize)),
+			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 			cached:  true, width: 70,
 			want: "no layout: NEW",
 		},
@@ -174,7 +174,7 @@ func TestPageMapNoLayout(t *testing.T) {
 		},
 		{
 			name:    "too narrow",
-			summary: pgpage.SummarizePage(fixturePage(t, 0)),
+			summary: pgpage.SummarizePage(fixturePage(t, 0), 0),
 			cached:  true, width: 10,
 			want: "too narrow",
 		},
@@ -200,7 +200,7 @@ func TestPageMapNoLayout(t *testing.T) {
 // The legend is laid out in columns that line up, and fits the width it was
 // given.
 func TestPageMapLegendColumns(t *testing.T) {
-	summary := pgpage.SummarizePage(fixturePage(t, 0))
+	summary := pgpage.SummarizePage(fixturePage(t, 0), 0)
 
 	for _, width := range []int{40, 70, 100, 140} {
 		m := pageMap(summary, true, width)
@@ -246,7 +246,7 @@ func TestPageMapColor(t *testing.T) {
 
 	const width = 70
 
-	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, width))
+	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, width))
 
 	for i, row := range rows {
 		if got := lipgloss.Width(row); got != width {
@@ -285,7 +285,7 @@ func TestPageMapColor(t *testing.T) {
 func TestPageMapColorRuns(t *testing.T) {
 	withColor(t)
 
-	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, 70))
+	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 70))
 
 	// The last row is all tuples: a single run, a single background.
 	if n := strings.Count(rows[mapRows-1], "48;5;"); n != 1 {
@@ -298,7 +298,7 @@ func TestPageMapColorRuns(t *testing.T) {
 func TestPageMapLegendSwatch(t *testing.T) {
 	withColor(t)
 
-	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, 140)
+	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 140)
 
 	legend := strings.Join(strings.Split(m, "\n")[mapRows+2:], "\n")
 
@@ -342,7 +342,7 @@ func TestPageMapGlyphsAreWidelySupported(t *testing.T) {
 func TestPageMapCellsAreUnderlined(t *testing.T) {
 	withColor(t)
 
-	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0)), true, 70))
+	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 70))
 
 	// The last row is all tuples: sand gray background, darker sand lines,
 	// and 4, the SGR code for underline.
@@ -356,7 +356,7 @@ func TestPageMapCellsAreUnderlined(t *testing.T) {
 // A highlight paints the cells its bytes fall in, and nothing else, and the
 // legend names it.
 func TestPageMapHighlight(t *testing.T) {
-	summary := pgpage.SummarizePage(fixturePage(t, 0))
+	summary := pgpage.SummarizePage(fixturePage(t, 0), 0)
 	hl := highlight{start: 8152, end: 8187, label: "item #1"}
 
 	m := pageMapWith(summary, true, 71, hl) // 64 cells: 8 bytes each

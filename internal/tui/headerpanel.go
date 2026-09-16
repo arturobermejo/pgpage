@@ -111,6 +111,8 @@ func derivedRows(summary pgpage.PageSummary) []headerRow {
 		{"free", free, valueStyle},
 	}
 
+	rows = append(rows, checksumRows(summary)...)
+
 	// One flag per line, the name of the field on the first one only: the
 	// names are long, and listed side by side they would make the panel as
 	// wide as all of them together.
@@ -124,6 +126,27 @@ func derivedRows(summary pgpage.PageSummary) []headerRow {
 	}
 
 	return append(rows, headerRow{"status", summary.Status.String(), statusStyle(summary.Status)})
+}
+
+// checksumRows returns what the panel says about the checksum of a page,
+// in the color of what it says: a mismatch is drawn like an invalid page,
+// with the checksum the bytes give on a line of its own, as the flags are
+// listed, so that the panel stays as wide as on any other page. A page
+// written with checksums off is dimmed: there is nothing to check.
+func checksumRows(summary pgpage.PageSummary) []headerRow {
+	switch summary.Checksum {
+	case pgpage.ChecksumOK:
+		return []headerRow{{"checksum", "OK", okStyle}}
+	case pgpage.ChecksumMismatch:
+		return []headerRow{
+			{"checksum", "MISMATCH", invalidStyle},
+			{"", fmt.Sprintf("computed %d", summary.ComputedChecksum), invalidStyle},
+		}
+	case pgpage.ChecksumDisabled:
+		return []headerRow{{"checksum", "DISABLED", moreStyle}}
+	default:
+		return []headerRow{{"checksum", "—", moreStyle}}
+	}
 }
 
 // headerRow is one field of the header panel and the style of its value.

@@ -19,13 +19,13 @@ func invalidSummary() pgpage.PageSummary {
 	page[16], page[17] = 0x00, 0x20 // pd_special = 8192
 	page[18], page[19] = 0x04, 0x20 // page size 8192, layout version 4
 
-	return pgpage.SummarizePage(page)
+	return pgpage.SummarizePage(page, 0)
 }
 
 // A new page is not a problem, and its panel says what it is instead of
 // showing an error.
 func TestStatusPanelNew(t *testing.T) {
-	panel := statusPanel(pgpage.SummarizePage(make([]byte, pgpage.PageSize)), 60)
+	panel := statusPanel(pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0), 60)
 
 	for _, want := range []string{"NEW PAGE", "all zeroes", "pd_lower 0"} {
 		if !strings.Contains(panel, want) {
@@ -89,7 +89,7 @@ func TestStatusPanelWraps(t *testing.T) {
 	}
 
 	summaries := []pgpage.PageSummary{
-		pgpage.SummarizePage(make([]byte, pgpage.PageSize)),
+		pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 		invalidSummary(),
 		long,
 	}

@@ -19,7 +19,7 @@ func runItems(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 
-	summary := pgpage.SummarizePage(page)
+	summary := pgpage.SummarizePage(page, block)
 	if summary.Status != pgpage.StatusOK {
 		// Without a valid header there are no line pointers to list.
 		printInspect(stdout, block, summary)
