@@ -24,22 +24,22 @@ func TestPageList(t *testing.T) {
 		{
 			name:  "all the pages fit",
 			pages: 3, selected: 0, top: 0, rows: 10,
-			want: []string{"> 0", "  1", "  2"},
+			want: []string{"> 0 …", "  1 …", "  2 …"},
 		},
 		{
 			name:  "the window stops at the last block",
 			pages: 3, selected: 2, top: 1, rows: 10,
-			want: []string{"  1", "> 2"},
+			want: []string{"  1 …", "> 2 …"},
 		},
 		{
 			name:  "a window in the middle counts what is left below",
 			pages: 128, selected: 5, top: 4, rows: 3,
-			want: []string{"    4", "  >   5", "    6", "  ↓ 121 more"},
+			want: []string{"4 …", "> 5 …", "6 …", "↓ 121 more"},
 		},
 		{
 			name:  "numbers line up on the width of the largest block",
 			pages: 128, selected: 127, top: 125, rows: 3,
-			want: []string{"  125", "  126", "> 127"},
+			want: []string{"  125 …", "  126 …", "> 127 …"},
 		},
 		{
 			name:  "an empty relation has no rows",
@@ -50,7 +50,7 @@ func TestPageList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			list := pageList(tt.pages, tt.selected, tt.top, tt.rows)
+			list := pageList(tt.pages, tt.selected, tt.top, tt.rows, summaryCache{})
 
 			if !strings.HasPrefix(list, "PAGES\n") && tt.pages != 0 {
 				t.Errorf("list does not start with its title:\n%s", list)
@@ -72,7 +72,7 @@ func TestPageList(t *testing.T) {
 
 // The selected block is the only one with the marker, wherever it is.
 func TestPageListMarksOnlyTheSelection(t *testing.T) {
-	list := pageList(10, 7, 5, 5)
+	list := pageList(10, 7, 5, 5, summaryCache{})
 
 	if n := strings.Count(list, ">"); n != 1 {
 		t.Errorf("%d markers in the list, want 1:\n%s", n, list)

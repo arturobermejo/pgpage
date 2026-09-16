@@ -51,6 +51,18 @@ func openFixture(t *testing.T) *pgpage.Relation {
 	return rel
 }
 
+// fixturePage returns one page of the fixture relation.
+func fixturePage(t *testing.T, block pgpage.BlockNumber) []byte {
+	t.Helper()
+
+	page, err := openFixture(t).ReadPage(block)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return page
+}
+
 // The first screen names the relation and its size, so the user knows what
 // they opened.
 func TestModelView(t *testing.T) {
@@ -75,10 +87,22 @@ func TestModelViewWithoutSize(t *testing.T) {
 	}
 }
 
-// Nothing is loaded before the first view, so there is no initial command.
+// The first thing the program does is ask for the pages it is about to
+// list, in a command: the screen is drawn before the disk answers.
 func TestModelInit(t *testing.T) {
-	if cmd := New(openFixture(t)).Init(); cmd != nil {
-		t.Errorf("Init returned a command, want none")
+	m := New(openFixture(t))
+
+	msg, ok := run(t, m.Init()).(summariesMsg)
+	if !ok {
+		t.Fatalf("Init did not return a command that loads summaries")
+	}
+
+	if len(msg.summaries) != 3 {
+		t.Errorf("%d summaries, want the 3 pages of the fixture", len(msg.summaries))
+	}
+
+	if len(m.summaries) != 0 {
+		t.Errorf("the command wrote %d summaries into the model, want 0", len(m.summaries))
 	}
 }
 
@@ -101,7 +125,7 @@ func TestModelUpdate(t *testing.T) {
 
 			next, cmd := m.Update(tt.msg)
 
-			if next != tea.Model(m) {
+			if !sameState(next, m) {
 				t.Errorf("Update changed the model: %+v, want %+v", next, m)
 			}
 
@@ -112,7 +136,17 @@ func TestModelUpdate(t *testing.T) {
 	}
 }
 
-// A resize is remembered, because the views are drawn to that width.
+// sameState reports whether a model went through Update unchanged. Model
+// cannot be compared with ==, because the cache it carries is a map.
+func sameState(next tea.Model, m Model) bool {
+	got, ok := next.(Model)
+
+	return ok && got.rel == m.rel && got.block == m.block && got.top == m.top &&
+		got.width == m.width && got.height == m.height && len(got.summaries) == len(m.summaries)
+}
+
+// A resize is remembered, because the views are drawn to that width. A taller
+// window also shows more pages, so it asks for the ones it does not have.
 func TestModelResize(t *testing.T) {
 	next, cmd := New(openFixture(t)).Update(tea.WindowSizeMsg{Width: 100, Height: 40})
 
@@ -125,8 +159,8 @@ func TestModelResize(t *testing.T) {
 		t.Errorf("size = %dx%d, want 100x40", m.width, m.height)
 	}
 
-	if cmd != nil {
-		t.Error("a resize returned a command, want none")
+	if _, ok := run(t, cmd).(summariesMsg); !ok {
+		t.Error("a resize did not ask for the pages it now shows")
 	}
 }
 
@@ -299,5 +333,53 @@ func TestModelResizeScrolls(t *testing.T) {
 
 	if m.block != 19 || m.top != 17 {
 		t.Errorf("block = %d, top = %d; want 19 and 17", m.block, m.top)
+	}
+}
+
+// Summaries reach the model only through a message, and the navigator then
+// shows them.
+func TestModelSummariesMsg(t *testing.T) {
+	m := New(openFixture(t))
+	m.width, m.height = 80, 16
+
+	if strings.Contains(m.View(), "items") {
+		t.Fatalf("the list shows summaries before reading any page:\n%s", m.View())
+	}
+
+	next, _ := m.Update(run(t, m.Init()))
+
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", next)
+	}
+
+	if len(m.summaries) != 3 {
+		t.Fatalf("%d summaries cached, want 3", len(m.summaries))
+	}
+
+	view := m.View()
+
+	for _, want := range []string{"185 items", "21% free", "OK", "180 items"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view does not contain %q:\n%s", want, view)
+		}
+	}
+}
+
+// A page is read once. Moving over pages the cache already holds asks for
+// nothing, which is what keeps navigation instant.
+func TestModelRefreshUsesTheCache(t *testing.T) {
+	m := New(openFixture(t))
+	m.width, m.height = 80, 16
+
+	next, _ := m.Update(run(t, m.Init()))
+	m, _ = next.(Model)
+
+	for _, keys := range [][]string{{"down"}, {"end"}, {"home"}, {"pgdown"}} {
+		m = press(t, m, keys...)
+
+		if cmd := m.refresh(); cmd != nil {
+			t.Errorf("after %v the model reads pages it already has", keys)
+		}
 	}
 }

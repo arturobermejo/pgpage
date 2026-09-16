@@ -24,6 +24,11 @@ type Model struct {
 	block pgpage.BlockNumber // the selected page
 	top   pgpage.BlockNumber // the first page the navigator shows
 
+	// summaries is what has been read from disk so far. A map is a
+	// reference, so every copy of the Model shares this one; that is what
+	// makes it a cache and not a snapshot, and why only Update writes to it.
+	summaries summaryCache
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -48,13 +53,31 @@ var _ tea.Model = Model{}
 // New returns the model of an explorer on rel, which the caller must keep
 // open until Run returns.
 func New(rel *pgpage.Relation) Model {
-	return Model{rel: rel}
+	return Model{rel: rel, summaries: summaryCache{}}
 }
 
-// Init returns the command to run before the first View. There is nothing to
-// load yet, so it returns none.
+// Init returns the command to run before the first View: reading the pages
+// the navigator starts on. The screen is drawn before it finishes.
 func (m Model) Init() tea.Cmd {
-	return nil
+	return m.refresh()
+}
+
+// refresh returns the command that reads the pages the navigator shows and
+// the cache does not have yet, or nil when there is nothing to read.
+func (m Model) refresh() tea.Cmd {
+	pages := m.rel.PageCount()
+	if pages == 0 {
+		return nil
+	}
+
+	last := lastVisible(pages, m.top, m.visibleRows())
+
+	lo, hi, missing := m.summaries.missingRange(m.top, last)
+	if !missing {
+		return nil
+	}
+
+	return loadSummaries(m.rel, lo, hi)
 }
 
 // Update returns the state that msg leads to, and a command to run next.
@@ -67,8 +90,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 
 		// A window of a different height holds a different number of rows,
-		// so the navigator may have to scroll to keep showing the selection.
+		// so the navigator may have to scroll to keep showing the selection,
+		// and it may now show pages nobody has read yet.
 		m.top = scrollTo(m.rel.PageCount(), m.top, m.block, m.visibleRows())
+
+		return m, m.refresh()
+
+	case summariesMsg:
+		// The command read these pages while the UI went on. Writing them
+		// here, and only here, keeps the cache to a single goroutine.
+		for block, summary := range msg.summaries {
+			m.summaries[block] = summary
+		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -78,18 +111,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "up", "k":
-			return m.move(-1), nil
+			m = m.move(-1)
 		case "down", "j":
-			return m.move(1), nil
+			m = m.move(1)
 		case "pgup":
-			return m.move(-m.visibleRows()), nil
+			m = m.move(-m.visibleRows())
 		case "pgdown":
-			return m.move(m.visibleRows()), nil
+			m = m.move(m.visibleRows())
 		case "home":
-			return m.selectBlock(0), nil
+			m = m.selectBlock(0)
 		case "end":
-			return m.selectBlock(int64(m.rel.PageCount()) - 1), nil
+			m = m.selectBlock(int64(m.rel.PageCount()) - 1)
+		default:
+			return m, nil
 		}
+
+		// Moving may have scrolled the window onto pages nobody has read.
+		return m, m.refresh()
 	}
 
 	return m, nil
@@ -142,7 +180,7 @@ func (m Model) View() string {
 	return strings.Join([]string{
 		topBar(m.rel, m.block, m.width),
 		"",
-		pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows()),
+		pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries),
 		"",
 		helpLine,
 	}, "\n") + "\n"
