@@ -191,7 +191,7 @@ func TestRun(t *testing.T) {
 	rel := openFixture(t)
 	done := make(chan error, 1)
 
-	go func() { done <- Run(rel, strings.NewReader("q"), &out) }()
+	go func() { done <- Run(rel, 2, strings.NewReader("q"), &out) }()
 
 	select {
 	case err := <-done:
@@ -201,6 +201,10 @@ func TestRun(t *testing.T) {
 
 		if !strings.Contains(out.String(), fixtureHeap) {
 			t.Errorf("output does not name the relation:\n%q", out.String())
+		}
+
+		if !strings.Contains(out.String(), "> 2") {
+			t.Errorf("the explorer did not start on block 2:\n%q", out.String())
 		}
 	case <-time.After(10 * time.Second):
 		// Do not read out here: the program still writes to it.
@@ -397,7 +401,14 @@ func TestModelRefreshUsesTheCache(t *testing.T) {
 func loaded(t *testing.T, width, height int) Model {
 	t.Helper()
 
-	m := New(openFixture(t))
+	return loadedOn(t, openFixture(t), width, height)
+}
+
+// loadedOn is loaded on any relation.
+func loadedOn(t *testing.T, rel *pgpage.Relation, width, height int) Model {
+	t.Helper()
+
+	m := New(rel)
 	m.width, m.height = width, height
 
 	next, _ := m.Update(run(t, m.Init()))
@@ -1456,5 +1467,190 @@ func TestModelExplainScroll(t *testing.T) {
 
 	if tall := press(t, loaded(t, 130, 60), "e", "pgdown"); tall.explain.scroll != 0 {
 		t.Errorf("an explanation that fits scrolled %d lines", tall.explain.scroll)
+	}
+}
+
+// openCopy copies the fixture to a temporary file and opens it, for the tests
+// that change the relation on disk while the explorer looks at it.
+func openCopy(t *testing.T) (*pgpage.Relation, string) {
+	t.Helper()
+
+	data, err := os.ReadFile(fixtureHeap)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "copy")
+	if err = os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := pgpage.OpenRelation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { rel.Close() })
+
+	return rel, path
+}
+
+// writeAt overwrites the file at path with data, starting at byte offset
+// of page block, as PostgreSQL would while the explorer is open.
+func writeAt(t *testing.T, path string, block pgpage.BlockNumber, offset int, data ...byte) {
+	t.Helper()
+
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteAt(data, int64(block)*pgpage.PageSize+int64(offset)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// settle runs cmd and the commands of any batch it returns, and feeds every
+// message to the model, as the runtime does.
+func settle(t *testing.T, m Model, cmd tea.Cmd) Model {
+	t.Helper()
+
+	if cmd == nil {
+		return m
+	}
+
+	msg := cmd()
+
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			m = settle(t, m, c)
+		}
+
+		return m
+	}
+
+	next, _ := m.Update(msg)
+	m, _ = next.(Model)
+
+	return m
+}
+
+// pressAndSettle sends a key and runs the commands it returns to the end.
+func pressAndSettle(t *testing.T, m Model, name string) Model {
+	t.Helper()
+
+	next, cmd := m.Update(keyMsg(name))
+	m, _ = next.(Model)
+
+	return settle(t, m, cmd)
+}
+
+// r reads the selected page again: a change made on disk after it was read
+// shows up, and until it arrives the screen keeps the old page.
+func TestModelReloadPage(t *testing.T) {
+	rel, path := openCopy(t)
+	m := loadedOn(t, rel, 130, 26)
+
+	writeAt(t, path, 0, 8, 0x34, 0x12) // pd_checksum = 0x1234 = 4660
+
+	if strings.Contains(m.View(), "4660") {
+		t.Fatal("the change is on screen before reading the page again")
+	}
+
+	next, cmd := m.Update(keyMsg("r"))
+	m, _ = next.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "block 0 read again from disk") || strings.Contains(view, "reading…") {
+		t.Errorf("r does not say what it did, or blanks the page while it reads:\n%s", view)
+	}
+
+	m = settle(t, m, cmd)
+
+	if !strings.Contains(lineWith(t, m.View(), "pd_checksum"), "4660") {
+		t.Errorf("the page read again does not show the new checksum:\n%s", m.View())
+	}
+
+	if strings.Contains(press(t, m, "down").View(), "read again") {
+		t.Error("the notice outlived the next key")
+	}
+}
+
+// In the line pointer view, r reads the line pointers again. When the page
+// now has fewer, the selection moves to the last one.
+func TestModelReloadItems(t *testing.T) {
+	rel, path := openCopy(t)
+	m := press(t, loadedOn(t, rel, 130, 26), "g", "2", "enter")
+	m = pressAndSettle(t, m, "enter")
+	m = press(t, m, "down") // #2, NORMAL
+
+	writeAt(t, path, 2, 28, 0x00, 0x80, 0x01, 0x00) // #2 becomes DEAD without storage
+
+	m = pressAndSettle(t, m, "r")
+
+	if row := lineWith(t, m.View(), "> #2"); !strings.Contains(strings.Join(strings.Fields(row), " "), "#2 DEAD — —") {
+		t.Errorf("#2 is not dead after reading the page again:\n%s", row)
+	}
+
+	m = press(t, m, "end") // #180
+
+	writeAt(t, path, 2, 12, 64, 0) // pd_lower = 64: 10 line pointers
+
+	if m = pressAndSettle(t, m, "r"); m.items.selected != 9 || len(m.items.ids) != 10 {
+		t.Errorf("selected %d of %d line pointers, want the last of 10", m.items.selected, len(m.items.ids))
+	}
+
+	if !strings.Contains(m.View(), "LINE POINTERS · 10") {
+		t.Errorf("the view still lists the old line pointers:\n%s", m.View())
+	}
+}
+
+// In the hex view, r reads the bytes again and keeps the dump scrolled where
+// it was.
+func TestModelReloadHex(t *testing.T) {
+	rel, path := openCopy(t)
+	m := press(t, loadedOn(t, rel, 130, 26), "g", "2", "enter")
+	m = pressAndSettle(t, m, "enter")
+	m = press(t, m, "x", "down", "down", "down")
+
+	offset := m.hex.vp.YOffset
+
+	writeAt(t, path, 2, 0x40, 0xAB, 0xCD)
+
+	m = pressAndSettle(t, m, "r")
+
+	if m.hex.vp.YOffset != offset {
+		t.Errorf("the dump scrolled to line %d, want %d", m.hex.vp.YOffset, offset)
+	}
+
+	if !strings.Contains(lineWith(t, m.View(), "0040  "), "ab cd") {
+		t.Errorf("the dump does not show the new bytes:\n%s", m.View())
+	}
+}
+
+// Explain mode explains the header read again, but keeps the old one when
+// the new one no longer parses: there would be nothing true to say about it.
+func TestModelReloadExplain(t *testing.T) {
+	rel, path := openCopy(t)
+	m := press(t, loadedOn(t, rel, 130, 26), "e")
+
+	writeAt(t, path, 0, 8, 0x34, 0x12)
+
+	if m = pressAndSettle(t, m, "r"); !strings.Contains(lineWith(t, m.View(), "pd_checksum"), "4660") {
+		t.Errorf("explain mode shows the old checksum:\n%s", m.View())
+	}
+
+	writeAt(t, path, 0, 14, 100, 0) // pd_upper = 100, below pd_lower
+
+	m = pressAndSettle(t, m, "r")
+
+	if m.explain.summary.Status != pgpage.StatusOK || m.summaries[0].Status != pgpage.StatusInvalid {
+		t.Errorf("explain status %v, cache status %v; want the old header kept and the page invalid",
+			m.explain.summary.Status, m.summaries[0].Status)
+	}
+
+	if back := press(t, m, "esc"); !strings.Contains(back.View(), "INVALID") {
+		t.Errorf("the page view does not show the page as invalid:\n%s", back.View())
 	}
 }

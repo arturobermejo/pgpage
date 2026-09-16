@@ -21,6 +21,7 @@ type keyMap struct {
 	Open    key.Binding
 	Hex     key.Binding
 	Explain key.Binding
+	Reload  key.Binding
 	Help    key.Binding
 	Quit    key.Binding
 	Back    key.Binding
@@ -37,7 +38,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown},
 		{k.Home, k.End, k.GoTo, k.Open, k.Hex, k.Explain},
-		{k.Help, k.Back, k.Quit},
+		{k.Reload, k.Help, k.Back, k.Quit},
 	}
 }
 
@@ -84,6 +85,10 @@ var keys = keyMap{
 		key.WithKeys("e"),
 		key.WithHelp("e", "explain"),
 	),
+	Reload: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "read the page again"),
+	),
 	Help: key.NewBinding(
 		key.WithKeys("?", "h"),
 		key.WithHelp("?", "keys"),
@@ -113,6 +118,7 @@ var itemKeys = keyMap{
 	Open:     describe(keys.Open, "tuple"),
 	Hex:      describe(keys.Hex, "hex at line pointer"),
 	Explain:  key.NewBinding(key.WithDisabled()),
+	Reload:   keys.Reload,
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "page view"),
 	Quit:     keys.Quit,
@@ -140,6 +146,7 @@ var tupleKeys = keyMap{
 	Open:     key.NewBinding(key.WithDisabled()),
 	Hex:      describe(keys.Hex, "hex at tuple"),
 	Explain:  key.NewBinding(key.WithDisabled()),
+	Reload:   keys.Reload,
 	Help:     keys.Help,
 	Back:     describe(keys.Back, "line pointers"),
 	Quit:     keys.Quit,
@@ -159,6 +166,7 @@ var hexKeys = keyMap{
 	Open:     key.NewBinding(key.WithDisabled()),
 	Hex:      key.NewBinding(key.WithDisabled()),
 	Explain:  key.NewBinding(key.WithDisabled()),
+	Reload:   keys.Reload,
 	Help:     keys.Help,
 	Back: key.NewBinding(
 		key.WithKeys(append(keys.Back.Keys(), keys.Hex.Keys()...)...),
@@ -188,6 +196,7 @@ var explainKeys = keyMap{
 	Open:     key.NewBinding(key.WithDisabled()),
 	Hex:      describe(keys.Hex, "show bytes"),
 	Explain:  key.NewBinding(key.WithDisabled()),
+	Reload:   keys.Reload,
 	Help:     keys.Help,
 	Back: key.NewBinding(
 		key.WithKeys(append(keys.Explain.Keys(), keys.Back.Keys()...)...),

@@ -10,12 +10,13 @@ import (
 	"github.com/arturobermejo/pgpage/internal/tui"
 )
 
-const tuiUsage = "usage: pgpage tui <relation-file>"
+const tuiUsage = "usage: pgpage [tui] <relation-file> [--block N]"
 
 // runTUI opens the relation and hands it to the interactive explorer, which
 // owns the screen until the user quits.
 func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := newFlagSet("tui", tuiUsage, stderr)
+	n := fs.Uint("block", 0, "block `number` of the page to start on")
 
 	path, err := parseArgs(fs, args)
 	if errors.Is(err, flag.ErrHelp) {
@@ -33,7 +34,16 @@ func runTUI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	defer rel.Close()
 
-	if err := tui.Run(rel, stdin, stdout); err != nil {
+	// An empty relation has no block to start on, but can still be opened:
+	// the explorer says it has no pages. Only a block that was asked for
+	// must exist.
+	block, err := blockInRange(rel, *n)
+	if err != nil && *n > 0 {
+		fmt.Fprintln(stderr, err)
+		return exitError
+	}
+
+	if err := tui.Run(rel, block, stdin, stdout); err != nil {
 		fmt.Fprintln(stderr, err)
 		return exitError
 	}

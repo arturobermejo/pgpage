@@ -57,8 +57,9 @@ func TestRunErrors(t *testing.T) {
 		args   []string
 		stderr string
 	}{
-		{name: "no command", args: nil, stderr: "usage: pgpage <command>"},
-		{name: "unknown command", args: []string{"dump"}, stderr: `unknown command "dump"`},
+		{name: "no command", args: nil, stderr: "usage: pgpage <relation-file>"},
+		{name: "unknown command", args: []string{"dump"}, stderr: `"dump" is neither a command nor a file`},
+		{name: "typo of a command", args: []string{"inspec", fixtureHeap}, stderr: `"inspec" is neither a command nor a file`},
 	}
 
 	for _, tt := range tests {
@@ -87,7 +88,7 @@ func TestHelp(t *testing.T) {
 		stdout string
 		stderr string
 	}{
-		{name: "help command", args: []string{"help"}, stdout: "usage: pgpage <command>"},
+		{name: "help command", args: []string{"help"}, stdout: "usage: pgpage <relation-file> [--block N]"},
 		{name: "inspect -h", args: []string{"inspect", "-h"}, stderr: "usage: pgpage inspect"},
 	}
 

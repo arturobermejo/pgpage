@@ -2,7 +2,8 @@
 //
 // Usage:
 //
-//	pgpage tui <relation-file>
+//	pgpage <relation-file> [--block N]
+//	pgpage tui <relation-file> [--block N]
 //	pgpage inspect <relation-file> [--block N]
 //	pgpage items <relation-file> [--block N]
 //	pgpage validate <relation-file>
@@ -14,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/arturobermejo/pgpage"
 )
@@ -25,10 +27,13 @@ const (
 	exitUsage = 2 // the command line is wrong
 )
 
-const usage = `usage: pgpage <command> [arguments]
+const usage = `usage: pgpage <relation-file> [--block N]
+       pgpage <command> [arguments]
+
+With a relation file and no command, pgpage opens the interactive explorer.
 
 commands:
-  tui <relation-file>                   explore the relation interactively
+  tui <relation-file> [--block N]       explore the relation interactively
   inspect <relation-file> [--block N]   print the header of one page
   items <relation-file> [--block N]     list the line pointers and tuples of one page
   validate <relation-file>              check every page of a heap relation
@@ -60,9 +65,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return exitOK
 	default:
-		fmt.Fprintf(stderr, "pgpage: unknown command %q\n\n%s", args[0], usage)
+		if isRelationArg(args[0]) {
+			return runTUI(args, stdin, stdout, stderr)
+		}
+
+		fmt.Fprintf(stderr, "pgpage: %q is neither a command nor a file\n\n%s", args[0], usage)
+
 		return exitUsage
 	}
+}
+
+// isRelationArg reports whether the first argument, which is not a command,
+// starts the explorer's arguments: a file that exists, or a flag such as
+// --block before the file.
+//
+// A name that is neither stays an error. Taking every unknown word for a file
+// would turn a typo like "pgpage inspec ./24576" into "no such file inspec",
+// which points the user at the wrong mistake. A file named like a command
+// can still be opened as ./inspect.
+func isRelationArg(arg string) bool {
+	if strings.HasPrefix(arg, "-") {
+		return true
+	}
+
+	_, err := os.Stat(arg)
+
+	return err == nil
 }
 
 // parseArgs parses flags and returns the single positional argument, the
@@ -139,14 +167,11 @@ func readBlockArg(fs *flag.FlagSet, args []string, stderr io.Writer) (block pgpa
 	}
 	defer rel.Close()
 
-	// Compare before converting: a huge --block must not wrap around to a
-	// valid block number.
-	if *n >= uint(rel.PageCount()) {
-		fmt.Fprintf(stderr, "pgpage: block %d is out of range: %s has %d pages\n", *n, path, rel.PageCount())
+	block, err = blockInRange(rel, *n)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 0, nil, exitError
 	}
-
-	block = pgpage.BlockNumber(*n)
 
 	page, err = rel.ReadPage(block)
 	if err != nil {
@@ -155,4 +180,16 @@ func readBlockArg(fs *flag.FlagSet, args []string, stderr io.Writer) (block pgpa
 	}
 
 	return block, page, exitOK
+}
+
+// blockInRange converts n to a block of rel, or fails if rel has no such
+// block.
+func blockInRange(rel *pgpage.Relation, n uint) (pgpage.BlockNumber, error) {
+	// Compare before converting: a huge --block must not wrap around to a
+	// valid block number.
+	if n >= uint(rel.PageCount()) {
+		return 0, fmt.Errorf("pgpage: block %d is out of range: %s has %d pages", n, rel.Path(), rel.PageCount())
+	}
+
+	return pgpage.BlockNumber(n), nil
 }

@@ -20,6 +20,7 @@ func bindings() map[string]key.Binding {
 		"Open":     keys.Open,
 		"Hex":      keys.Hex,
 		"Explain":  keys.Explain,
+		"Reload":   keys.Reload,
 		"Help":     keys.Help,
 		"Quit":     keys.Quit,
 		"Back":     keys.Back,
@@ -148,6 +149,23 @@ func TestTupleKeysMatchPageKeys(t *testing.T) {
 	for name, binding := range disabled {
 		if binding.Enabled() {
 			t.Errorf("%s is enabled in the tuple view, where it does nothing", name)
+		}
+	}
+}
+
+// r reads the page again in every view, since every view shows the page.
+func TestReloadInEveryView(t *testing.T) {
+	for name, km := range map[string]keyMap{
+		"pages": keys, "items": itemKeys, "tuple": tupleKeys, "hex": hexKeys, "explain": explainKeys,
+	} {
+		if !key.Matches(keyMsg("r"), km.Reload) {
+			t.Errorf("r does not read the page again in the %s view", name)
+		}
+
+		for _, other := range []key.Binding{km.Up, km.Down, km.GoTo, km.Open, km.Hex, km.Explain, km.Help, km.Back, km.Quit} {
+			if key.Matches(keyMsg("r"), other) {
+				t.Errorf("r is also bound to %q in the %s view", other.Help().Desc, name)
+			}
 		}
 	}
 }

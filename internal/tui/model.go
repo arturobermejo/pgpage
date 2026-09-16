@@ -58,6 +58,10 @@ type Model struct {
 	// in focus.
 	explain explainState
 
+	// notice is a one-off message for the bottom line, such as what a key
+	// just did that the screen does not show. The next key clears it.
+	notice string
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -194,7 +198,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// A page read again keeps the dump where the user scrolled it.
+		offset, again := m.hex.vp.YOffset, m.hex.loaded
+
 		m = m.showHex(msg.page, msg.err)
+
+		if again {
+			m.hex.vp.SetYOffset(offset)
+		}
 
 	case itemsMsg:
 		// Line pointers of a page the user already left are of no use: by
@@ -205,6 +216,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.items.loaded = true
 		m.items.page, m.items.header, m.items.ids, m.items.err = msg.page, msg.header, msg.ids, msg.err
+
+		// Read again, the page may have fewer line pointers than the one
+		// selected: the selection stays as close as the page allows.
+		m.items.selected = max(min(m.items.selected, len(m.items.ids)-1), 0)
 		m.items.top = windowTop(len(m.items.ids), m.items.top, m.items.selected, m.itemRows())
 
 	case summariesMsg:
@@ -212,6 +227,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// here, and only here, keeps the cache to a single goroutine.
 		for block, summary := range msg.summaries {
 			m.summaries[block] = summary
+
+			// Explain mode keeps the header it was opened on. A header read
+			// again replaces it, unless it no longer parses: then there is
+			// nothing to explain, and the page view says why.
+			if block == m.explain.block && summary.Status == pgpage.StatusOK {
+				m.explain.summary = summary
+			}
 		}
 
 	case tea.KeyMsg:
@@ -219,6 +241,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// shortcut, or typing "q" in it would quit the program.
 		if m.prompt.active {
 			return m.updatePrompt(msg)
+		}
+
+		m.notice = ""
+
+		// Every view shows the same page, so reading it again is one action
+		// for all of them.
+		if key.Matches(msg, m.keyMap().Reload) {
+			return m.reload()
 		}
 
 		switch m.current() {
@@ -301,6 +331,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// reload reads the selected page again, for every view that shows it: the
+// summary the page view, the map and explain mode draw from, the line
+// pointers and tuples, and the dump. Nothing is cleared first, so the screen
+// keeps showing the old page until the new one arrives, instead of flashing
+// "reading…".
+//
+// The relation's page count is not read again: Relation describes the file
+// as it was opened.
+func (m Model) reload() (tea.Model, tea.Cmd) {
+	if m.rel.PageCount() == 0 {
+		return m, nil
+	}
+
+	cmds := []tea.Cmd{loadSummaries(m.rel, m.block, m.block)}
+
+	// The views on the stack were all opened on the selected page, and the
+	// messages of any that was closed meanwhile are dropped by their guards.
+	if m.items.loaded && m.items.block == m.block {
+		cmds = append(cmds, loadItems(m.rel, m.block))
+	}
+
+	if m.current() == viewHex {
+		cmds = append(cmds, loadHex(m.rel, m.hex.block))
+	}
+
+	m.notice = fmt.Sprintf("block %d read again from disk", m.block)
+
+	return m, tea.Batch(cmds...)
 }
 
 // openItems opens the line pointer view on the selected page. Only a page
@@ -717,6 +777,10 @@ func (m Model) View() string {
 		body = m.explainBody()
 	}
 
+	if m.notice != "" {
+		footer = noteStyle.Render(m.notice)
+	}
+
 	if m.prompt.active {
 		footer = m.prompt.view()
 	}
@@ -1033,10 +1097,11 @@ func join(blocks []string, sep string) []string {
 // line and the blank line before each.
 const bodyChrome = 4
 
-// Run starts the explorer on rel and blocks until the user quits. It reads
-// keys from in and draws on out, which is the terminal in practice.
-func Run(rel *pgpage.Relation, in io.Reader, out io.Writer) error {
-	p := tea.NewProgram(New(rel),
+// Run starts the explorer on rel with block selected, and blocks until the
+// user quits. It reads keys from in and draws on out, which is the terminal in
+// practice. A block past the end of the relation selects the last page.
+func Run(rel *pgpage.Relation, block pgpage.BlockNumber, in io.Reader, out io.Writer) error {
+	p := tea.NewProgram(New(rel).selectBlock(int64(block)),
 		tea.WithInput(in),
 		tea.WithOutput(out),
 		tea.WithAltScreen(),
