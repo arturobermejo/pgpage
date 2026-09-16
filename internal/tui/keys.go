@@ -17,6 +17,7 @@ type keyMap struct {
 	Home     key.Binding
 	End      key.Binding
 
+	GoTo key.Binding
 	Help key.Binding
 	Quit key.Binding
 	Back key.Binding
@@ -25,14 +26,14 @@ type keyMap struct {
 // ShortHelp returns the bindings of the one-line help at the bottom of the
 // screen: the few that a user needs to get anywhere.
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Home, k.End, k.Help, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.GoTo, k.Help, k.Quit}
 }
 
 // FullHelp returns the bindings of the help screen, in columns.
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown},
-		{k.Home, k.End},
+		{k.Home, k.End, k.GoTo},
 		{k.Help, k.Back, k.Quit},
 	}
 }
@@ -63,6 +64,10 @@ var keys = keyMap{
 	End: key.NewBinding(
 		key.WithKeys("end"),
 		key.WithHelp("End", "last page"),
+	),
+	GoTo: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "go to block"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("?", "h"),

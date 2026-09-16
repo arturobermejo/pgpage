@@ -37,6 +37,10 @@ type Model struct {
 	help     help.Model
 	showHelp bool
 
+	// prompt is the "go to block" input. While it is open it takes every
+	// key, so the shortcuts below are not reachable.
+	prompt prompt
+
 	// Size of the terminal, in cells. Both are zero until the first
 	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
 	// else, so View must cope with not knowing the size yet.
@@ -61,7 +65,7 @@ var _ tea.Model = Model{}
 // New returns the model of an explorer on rel, which the caller must keep
 // open until Run returns.
 func New(rel *pgpage.Relation) Model {
-	return Model{rel: rel, summaries: summaryCache{}, help: help.New()}
+	return Model{rel: rel, summaries: summaryCache{}, help: help.New(), prompt: newPrompt()}
 }
 
 // Init returns the command to run before the first View: reading the pages
@@ -113,11 +117,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// An open prompt owns the keyboard: it must come before every
+		// shortcut, or typing "q" in it would quit the program.
+		if m.prompt.active {
+			return m.updatePrompt(msg)
+		}
+
 		switch {
 		case key.Matches(msg, keys.Quit):
 			// tea.Quit is a command, not an action: returning it asks the
 			// runtime to stop after this update.
 			return m, tea.Quit
+
+		case key.Matches(msg, keys.GoTo):
+			var cmd tea.Cmd
+
+			m.showHelp = false
+			m.prompt, cmd = m.prompt.open()
+
+			return m, cmd
 
 		case key.Matches(msg, keys.Help):
 			m.showHelp = !m.showHelp
@@ -152,6 +170,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+// updatePrompt handles a key while the "go to block" prompt is open: Enter
+// jumps if what was typed is a block of this relation, Esc gives up, and
+// everything else is line editing.
+func (m Model) updatePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.prompt = m.prompt.close()
+
+		return m, nil
+
+	case tea.KeyEnter:
+		block, err := parseBlock(m.prompt.input.Value(), m.rel.PageCount())
+		if err != nil {
+			// The prompt stays open with the text and the reason, so the
+			// user can fix a typo instead of typing it all again.
+			m.prompt.err = err.Error()
+
+			return m, nil
+		}
+
+		m.prompt = m.prompt.close()
+		m = m.selectBlock(int64(block))
+
+		return m, m.refresh()
+
+	default:
+		var cmd tea.Cmd
+
+		m.prompt.err = "" // typing again clears the last complaint
+		m.prompt, cmd = m.prompt.update(msg)
+
+		return m, cmd
+	}
 }
 
 // move changes the selection by delta pages.
@@ -199,6 +252,10 @@ func (m Model) visibleRows() int {
 // read anything but it: Bubble Tea may call it after any message.
 func (m Model) View() string {
 	body, footer := m.body(), m.help.ShortHelpView(keys.ShortHelp())
+
+	if m.prompt.active {
+		footer = m.prompt.view(m.rel.PageCount())
+	}
 
 	if m.showHelp {
 		body = m.clip(helpScreen(m.help, keys))

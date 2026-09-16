@@ -211,12 +211,15 @@ func TestRun(t *testing.T) {
 // the bindings are declared with.
 func keyMsg(name string) tea.KeyMsg {
 	types := map[string]tea.KeyType{
-		"up":     tea.KeyUp,
-		"down":   tea.KeyDown,
-		"pgup":   tea.KeyPgUp,
-		"pgdown": tea.KeyPgDown,
-		"home":   tea.KeyHome,
-		"end":    tea.KeyEnd,
+		"up":        tea.KeyUp,
+		"down":      tea.KeyDown,
+		"pgup":      tea.KeyPgUp,
+		"pgdown":    tea.KeyPgDown,
+		"home":      tea.KeyHome,
+		"end":       tea.KeyEnd,
+		"enter":     tea.KeyEnter,
+		"backspace": tea.KeyBackspace,
+		"esc":       tea.KeyEsc,
 	}
 
 	if kind, ok := types[name]; ok {
@@ -692,5 +695,99 @@ func TestModelHelpFitsTheTerminal(t *testing.T) {
 				t.Errorf("%dx%d: a line is %d cells wide:\n%q", size[0], size[1], got, line)
 			}
 		}
+	}
+}
+
+// g opens the prompt, and what is typed there moves the selection.
+func TestModelGoToBlock(t *testing.T) {
+	m := loaded(t, 110, 20)
+
+	if strings.Contains(m.View(), "GO TO BLOCK") {
+		t.Fatalf("the prompt is open before pressing g:\n%s", m.View())
+	}
+
+	m = press(t, m, "g")
+
+	if !m.prompt.active || !strings.Contains(m.View(), "GO TO BLOCK") {
+		t.Fatalf("g did not open the prompt:\n%s", m.View())
+	}
+
+	m = press(t, m, "2", "enter")
+
+	if m.block != 2 {
+		t.Errorf("block = %d after typing 2, want 2", m.block)
+	}
+
+	if m.prompt.active {
+		t.Error("the prompt stayed open after a jump")
+	}
+}
+
+// An open prompt owns the keyboard: keys that are shortcuts outside it are
+// just text inside it.
+func TestModelPromptCapturesKeys(t *testing.T) {
+	m := press(t, loaded(t, 110, 20), "g")
+
+	next, cmd := m.Update(keyMsg("q"))
+	if isQuit(cmd) {
+		t.Fatal("q quit the program while the prompt was open")
+	}
+
+	m, _ = next.(Model)
+
+	m = press(t, m, "j", "k")
+
+	if m.block != 0 {
+		t.Errorf("block = %d, want 0: the navigation keys moved the selection", m.block)
+	}
+
+	if got := m.prompt.input.Value(); got != "qjk" {
+		t.Errorf("the prompt holds %q, want %q", got, "qjk")
+	}
+}
+
+// A block that does not exist leaves the prompt open, with the text and the
+// reason, so a typo can be fixed instead of typed again.
+func TestModelPromptRejectsBadInput(t *testing.T) {
+	m := press(t, loaded(t, 110, 20), "g", "9", "9", "enter")
+
+	if m.block != 0 {
+		t.Errorf("block = %d, want 0: the jump should not have happened", m.block)
+	}
+
+	if !m.prompt.active {
+		t.Fatal("the prompt closed after a rejected block")
+	}
+
+	if got := m.prompt.input.Value(); got != "99" {
+		t.Errorf("the prompt holds %q, want the text to stay as %q", got, "99")
+	}
+
+	if !strings.Contains(m.View(), "past the last one") {
+		t.Errorf("the view does not explain the rejection:\n%s", m.View())
+	}
+
+	// Typing again clears the complaint, and a valid block jumps.
+	m = press(t, m, "backspace", "backspace", "1", "enter")
+
+	if m.block != 1 || m.prompt.active {
+		t.Errorf("block = %d, prompt open = %v; want 1 and closed", m.block, m.prompt.active)
+	}
+}
+
+// Esc gives up on the jump and leaves the selection where it was.
+func TestModelPromptCancel(t *testing.T) {
+	m := press(t, loaded(t, 110, 20), "end", "g", "0", "esc")
+
+	if m.block != 2 {
+		t.Errorf("block = %d, want 2: Esc must not jump", m.block)
+	}
+
+	if m.prompt.active {
+		t.Error("Esc did not close the prompt")
+	}
+
+	if !strings.Contains(m.View(), "next page") {
+		t.Errorf("the help line did not come back:\n%s", m.View())
 	}
 }
