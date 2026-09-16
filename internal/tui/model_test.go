@@ -1654,3 +1654,45 @@ func TestModelReloadExplain(t *testing.T) {
 		t.Errorf("the page view does not show the page as invalid:\n%s", back.View())
 	}
 }
+
+// Resizing the terminal one column at a time keeps the map at the same scale
+// until the next grid fits, and the panels still fill the screen: the map
+// panel keeps the width it had, and pads the grid.
+func TestModelMapKeepsItsScale(t *testing.T) {
+	changes, last := 0, 0
+
+	for width := 110; width <= 170; width++ {
+		for _, m := range []Model{loaded(t, width, 26), openItemsView(t, 2, width, 26)} {
+			view := m.View()
+			if !strings.Contains(view, "0x0200 ") {
+				continue // too narrow for a map next to the other panels
+			}
+
+			top := strings.Split(view, "\n")[2]
+			if lipgloss.Width(top) != width-1 || !strings.HasSuffix(top, borderTopRight) {
+				t.Errorf("width %d, view %v: the panels do not reach the right margin:\n%s", width, m.current(), top)
+			}
+
+			if m.current() != viewPages {
+				continue
+			}
+
+			// The grid is the row after its offset, up to the blank space
+			// the panel pads it with.
+			row := lineWith(t, view, "0x0200 ")
+			row = row[strings.Index(row, "0x0200 ")+len("0x0200 "):]
+			cells := lipgloss.Width(strings.TrimRight(row[:strings.Index(row, borderVertical)], " "))
+
+			if cells != last {
+				changes++
+				last = cells
+			}
+		}
+	}
+
+	// From no grid to 16 cells, 32 and 64: three changes in sixty columns,
+	// not one per column.
+	if changes > len(mapCellChoices) {
+		t.Errorf("the map changed its scale %d times between 110 and 170 columns, want at most %d", changes, len(mapCellChoices))
+	}
+}

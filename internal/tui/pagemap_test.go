@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,7 +39,7 @@ func mapLines(t *testing.T, m string) []string {
 // The grid has one row per 512 bytes, labelled with the offset that row
 // starts at, and every row is as wide as the map.
 func TestPageMapGrid(t *testing.T) {
-	const width = 70
+	const width = offsetLabel + 64
 
 	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, width)
 
@@ -244,7 +245,7 @@ func withColor(t *testing.T) {
 func TestPageMapColor(t *testing.T) {
 	withColor(t)
 
-	const width = 70
+	const width = offsetLabel + 64
 
 	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, width))
 
@@ -382,5 +383,184 @@ func TestPageMapHighlight(t *testing.T) {
 
 	if plain := pageMap(summary, true, 71); strings.Contains(plain, highlightGlyph) {
 		t.Errorf("the map highlights bytes nobody asked for:\n%s", plain)
+	}
+}
+
+// The grid is drawn at a few fixed widths only, each a whole number of bytes
+// per cell, so resizing the terminal does not change the scale one column at
+// a time: across a hundred widths there are only as many scales as choices.
+func TestPageMapScaleIsStable(t *testing.T) {
+	summary := pgpage.SummarizePage(fixturePage(t, 0), 0)
+	scales := map[int]bool{}
+
+	for width := offsetLabel + minMapCells; width <= 200; width++ {
+		cells := mapCells(width)
+
+		if cells == 0 || bytesPerRow%cells != 0 {
+			t.Fatalf("width %d: %d cells, which do not divide a row of %d bytes", width, cells, bytesPerRow)
+		}
+
+		// The widest choice that fits: the next wider one would not.
+		if i := slices.Index(mapCellChoices, cells); i > 0 && offsetLabel+mapCellChoices[i-1] <= width {
+			t.Errorf("width %d draws %d cells, but %d fit", width, cells, mapCellChoices[i-1])
+		}
+
+		m := pageMap(summary, true, width)
+
+		for _, row := range mapLines(t, m) {
+			if got := lipgloss.Width(row); got != offsetLabel+cells {
+				t.Fatalf("width %d: a row is %d cells, want %d", width, got, offsetLabel+cells)
+			}
+		}
+
+		if want := fmt.Sprintf("1 cell = %d B", bytesPerRow/cells); !strings.Contains(m, want) {
+			t.Errorf("width %d: the map does not say %q", width, want)
+		}
+
+		scales[cells] = true
+	}
+
+	if len(scales) != len(mapCellChoices) {
+		t.Errorf("%d scales between widths %d and 200, want %d", len(scales), offsetLabel+minMapCells, len(mapCellChoices))
+	}
+
+	if got := mapCells(offsetLabel + minMapCells - 1); got != 0 {
+		t.Errorf("a map narrower than the narrowest grid draws %d cells", got)
+	}
+}
+
+// The labels of the ruler above the grid never run into each other: on the
+// narrowest grid, where +128 fills the space up to +256, the second is left
+// out.
+func TestColumnScaleLabelsDoNotTouch(t *testing.T) {
+	for _, cells := range mapCellChoices {
+		scale := columnScale(cells)
+
+		if strings.Contains(scale, "8+") || strings.Contains(scale, "6+") {
+			t.Errorf("%d cells: labels run together: %q", cells, scale)
+		}
+
+		if !strings.Contains(scale, "+0") || !strings.Contains(scale, "+128") {
+			t.Errorf("%d cells: the ruler lost its first labels: %q", cells, scale)
+		}
+	}
+}
+
+// A cell on a boundary is split in eighths, so a region that does not fill a
+// whole number of cells still shows its size: with 16 bytes a cell, the
+// 24-byte header is one cell and a half, not two.
+func TestSplitCell(t *testing.T) {
+	withColor(t)
+
+	rs := regions(764, 2472, 8192)
+	hl := highlight{start: 8152, end: 8189}
+
+	header, pointers := paint{kind: pgpage.RegionHeader}, paint{kind: pgpage.RegionLinePointers}
+
+	tests := []struct {
+		name       string
+		start, end int
+		want       cell
+	}{
+		{name: "inside the header", start: 0, end: 16, want: cell{header, header, eighths}},
+		{name: "header ends mid cell", start: 16, end: 32, want: cell{header, pointers, 4}},
+		{name: "a quarter of header", start: 16, end: 48, want: cell{header, pointers, 2}},
+		{name: "most of the cell header", start: 0, end: 32, want: cell{header, pointers, 6}},
+		{
+			name: "free space into tuples", start: 2464, end: 2480,
+			want: cell{paint{kind: pgpage.RegionFree}, paint{kind: pgpage.RegionTuples}, 4},
+		},
+		{
+			name: "the highlight starts", start: 8144, end: 8160,
+			want: cell{paint{kind: pgpage.RegionTuples}, paint{kind: pgpage.RegionTuples, highlighted: true}, 4},
+		},
+		{
+			// 13 of 16 bytes are 6.5 eighths, rounded up.
+			name: "rounded to the nearest eighth", start: 8176, end: 8192,
+			want: cell{paint{kind: pgpage.RegionTuples, highlighted: true}, paint{kind: pgpage.RegionTuples}, 7},
+		},
+		{
+			name: "the highlight ends", start: 8160, end: 8192,
+			want: cell{paint{kind: pgpage.RegionTuples, highlighted: true}, paint{kind: pgpage.RegionTuples}, 7},
+		},
+	}
+
+	for _, tt := range tests {
+		if got := splitCell(rs, hl, tt.start, tt.end); got != tt.want {
+			t.Errorf("%s: splitCell(%d, %d) = %+v, want %+v", tt.name, tt.start, tt.end, got, tt.want)
+		}
+	}
+
+	// A single byte is a quarter of an eighth of a 32-byte cell, which rounds
+	// to nothing; it is drawn as one eighth, so that it does not vanish.
+	tiny := highlight{start: 1000, end: 1001}
+	if got := splitCell(rs, tiny, 1000, 1032); got.eighths != 1 {
+		t.Errorf("one highlighted byte fills %d eighths of its cell, want 1", got.eighths)
+	}
+}
+
+// With color, the map adds up: counting whole cells and the eighths of split
+// ones gives back the size of every region, exactly, at every scale. The
+// boundaries of a heap page fall on multiples of 4 bytes, and an eighth of a
+// cell is at most 4 bytes.
+func TestPageMapAddsUp(t *testing.T) {
+	withColor(t)
+
+	for _, block := range []pgpage.BlockNumber{0, 2} {
+		summary := pgpage.SummarizePage(fixturePage(t, block), block)
+		rs := pgpage.PageRegions(summary.Header)
+
+		for _, cells := range mapCellChoices {
+			perCell := bytesPerRow / cells
+			drawn := map[pgpage.RegionKind]int{}
+
+			for row := range mapRows {
+				for i := range cells {
+					start := row*bytesPerRow + i*perCell
+					c := splitCell(rs, highlight{}, start, start+perCell)
+
+					drawn[c.left.kind] += c.eighths * perCell / eighths
+					drawn[c.right.kind] += (eighths - c.eighths) * perCell / eighths
+				}
+			}
+
+			for _, region := range rs {
+				if drawn[region.Kind] != region.Len() {
+					t.Errorf("block %d, %d cells: %v is drawn as %d bytes, want %d",
+						block, cells, region.Kind, drawn[region.Kind], region.Len())
+				}
+			}
+		}
+	}
+}
+
+// A split cell is drawn with the block character of its eighths, in the
+// colors of the two regions, and the row keeps the width of the grid.
+func TestPageMapSplitCellColors(t *testing.T) {
+	withColor(t)
+
+	rows := mapLines(t, pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, offsetLabel+32))
+
+	// Row 0 at 16 bytes a cell: the header ends half way through cell 1, a
+	// half block in the header's color over the line pointers' color.
+	if !strings.Contains(rows[0], "38;5;138;48;5;109m▌") {
+		t.Errorf("row 0 has no half cell from header to line pointers:\n%q", rows[0])
+	}
+
+	// A split cell is not underlined: the underline would take the left
+	// color, and show as a bright dash under the row. One eighth is the same
+	// character as a whole cell, which is underlined, so it is left out.
+	for _, row := range rows {
+		for _, block := range partialBlocks[1:] {
+			if block != cellGlyph && strings.Contains(row, ";4m"+block) {
+				t.Errorf("a split cell %q is underlined:\n%q", block, row)
+			}
+		}
+	}
+
+	for i, row := range rows {
+		if got := lipgloss.Width(row); got != offsetLabel+32 {
+			t.Errorf("row %d is %d cells wide, want %d", i, got, offsetLabel+32)
+		}
 	}
 }

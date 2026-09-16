@@ -16,13 +16,36 @@ const (
 	mapRows     = 16
 	bytesPerRow = pgpage.PageSize / mapRows // 512
 	offsetLabel = 7                         // "0x0000" and a space
-	minMapCells = 16
 )
+
+// mapCellChoices are the only widths the grid is drawn at, widest first. Each
+// divides a row evenly, so every cell holds a whole number of bytes: 8, 16 or
+// 32. The grid used to take whatever width the terminal left, and resizing
+// the window changed how many bytes a cell stood for one column at a time;
+// now it keeps its scale until the window crosses one of these steps.
+//
+// 32 cells is also one cell per line of the hex view, 16 bytes.
+var mapCellChoices = []int{64, 32, minMapCells}
+
+// minMapCells is the narrowest grid, the last of mapCellChoices.
+const minMapCells = 16
+
+// mapCells returns the widest grid that fits in width cells next to the
+// offsets, or 0 when not even the narrowest one does.
+func mapCells(width int) int {
+	for _, cells := range mapCellChoices {
+		if offsetLabel+cells <= width {
+			return cells
+		}
+	}
+
+	return 0
+}
 
 // cellGlyph is drawn in every cell of the map when the terminal shows color:
 // a thin line along the left edge of the cell, in a darker shade of the
-// region, over the region's background. A cell of the grid holds about 8
-// bytes, so the lines mark the page every 8 bytes.
+// region, over the region's background. A cell of the grid holds 8, 16 or 32
+// bytes (see mapCellChoices), so the lines mark the page at that step.
 //
 // The line along the bottom, which keeps the rows apart, is not part of the
 // glyph: it is the terminal's underline, which a terminal draws in the text
@@ -87,10 +110,7 @@ func swatch(p paint, n int) string {
 		return strings.Repeat(regionGlyph[p.kind], n)
 	}
 
-	colors := regionPalette[p.kind]
-	if p.highlighted {
-		colors = highlightColors
-	}
+	colors := colorsOf(p)
 
 	// termenv, the library under Lip Gloss, styles the whole run with a
 	// single escape sequence. Lip Gloss would underline it one character at
@@ -104,8 +124,9 @@ func swatch(p paint, n int) string {
 		String()
 }
 
-// pageMap renders the page as a grid of width cells, with the byte offset of
-// each row on the left and a legend below:
+// pageMap renders the page as a grid, with the byte offset of each row on the
+// left and a legend below, in width cells. The grid takes the widest of
+// mapCellChoices that fits, and the legend the whole width:
 //
 //	       +0        +128      +256      +384
 //	0x0000 ███╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱
@@ -132,8 +153,8 @@ func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highligh
 		return moreStyle.Render("no layout: " + summary.Status.String())
 	}
 
-	cells := width - offsetLabel
-	if cells < minMapCells {
+	cells := mapCells(width)
+	if cells == 0 {
 		return moreStyle.Render("too narrow")
 	}
 
@@ -147,6 +168,7 @@ func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highligh
 	}
 
 	b.WriteString("\n\n" + legend(regions, width))
+	b.WriteString("\n" + fieldStyle.Render(fmt.Sprintf("1 cell = %d B", bytesPerRow/cells)))
 
 	if hl.start < hl.end {
 		b.WriteString("\n" + swatch(paint{highlighted: true}, 1) + " " + valueStyle.Render(hl.label) + " " +
@@ -170,32 +192,138 @@ func stripRow(regions []pgpage.Region, base, span, cells int, hl highlight) stri
 		run int
 	)
 
+	flush := func() {
+		if run > 0 {
+			b.WriteString(swatch(cur, run))
+			run = 0
+		}
+	}
+
 	for i := range cells {
 		// Cell boundaries are computed from the cell index, not accumulated,
 		// so rounding cannot drift along the row.
 		start := base + i*span/cells
 		end := max(base+(i+1)*span/cells, start+1)
 
-		cell := paint{
-			kind:        cellRegion(regions, start, end),
-			highlighted: hl.covers(start, end),
+		cell := splitCell(regions, hl, start, end)
+
+		// A cell split between two paints is drawn on its own.
+		if cell.eighths < eighths {
+			flush()
+			b.WriteString(splitSwatch(cell))
+
+			continue
 		}
 
-		// Consecutive cells painted alike are styled together: one escape
-		// sequence for the run instead of one per cell.
-		if run > 0 && cell != cur {
-			b.WriteString(swatch(cur, run))
-
-			run = 0
+		// Consecutive whole cells painted alike are styled together: one
+		// escape sequence for the run instead of one per cell.
+		if run > 0 && cell.left != cur {
+			flush()
 		}
 
-		cur = cell
+		cur = cell.left
 		run++
 	}
 
-	b.WriteString(swatch(cur, run))
+	flush()
 
 	return b.String()
+}
+
+// eighths is how finely a cell of the map is split: the block characters
+// ▏▎▍▌▋▊▉█ fill a cell from the left in eighths.
+const eighths = 8
+
+// partialBlocks are the characters that fill the left 1 to 7 eighths of a
+// cell, indexed by eighths.
+var partialBlocks = [eighths]string{"", "▏", "▎", "▍", "▌", "▋", "▊", "▉"}
+
+// cell is how one cell of the map is painted: whole in one paint, or split
+// where the bytes it covers change from one paint to the next.
+type cell struct {
+	left, right paint
+	eighths     int // of the cell painted left; eighths means the whole cell
+}
+
+// splitCell returns how the bytes in [start, end) paint a cell.
+//
+// A cell holds several bytes, and a boundary between two regions rarely falls
+// between two cells. Painting the cell whole in one of them would move the
+// boundary by up to a cell: with 16 bytes a cell, the 24-byte header would
+// look like 32 bytes. So a cell on a boundary is split: the left part in the
+// paint of its first bytes, in eighths of the cell, and the rest in the paint
+// of its last byte. With 8, 16 or 32 bytes a cell an eighth is 1, 2 or 4
+// bytes, and the boundaries of a heap page, which fall on multiples of 4, are
+// drawn exactly.
+//
+// Without color there is no way to draw half a glyph, and the cell takes the
+// region that owns most of its bytes, as before.
+func splitCell(regions []pgpage.Region, hl highlight, start, end int) cell {
+	if lipgloss.ColorProfile() == termenv.Ascii {
+		p := paint{kind: cellRegion(regions, start, end), highlighted: hl.covers(start, end)}
+
+		return cell{left: p, right: p, eighths: eighths}
+	}
+
+	left := paintAt(regions, hl, start)
+
+	same := 1
+	for same < end-start && paintAt(regions, hl, start+same) == left {
+		same++
+	}
+
+	if same == end-start {
+		return cell{left: left, right: left, eighths: eighths}
+	}
+
+	// Rounded to the nearest eighth, but never to none or all of the cell:
+	// both paints are in it, so both must show.
+	n := end - start
+	e := min(max((same*eighths+n/2)/n, 1), eighths-1)
+
+	return cell{left: left, right: paintAt(regions, hl, end-1), eighths: e}
+}
+
+// paintAt returns how byte b of the page is painted.
+func paintAt(regions []pgpage.Region, hl highlight, b int) paint {
+	p := paint{highlighted: hl.covers(b, b+1)}
+
+	for _, region := range regions {
+		if region.Start <= b && b < region.End {
+			p.kind = region.Kind
+			break
+		}
+	}
+
+	return p
+}
+
+// colorsOf returns the colors a paint is drawn with.
+func colorsOf(p paint) regionColors {
+	if p.highlighted {
+		return highlightColors
+	}
+
+	return regionPalette[p.kind]
+}
+
+// splitSwatch draws a split cell: the left eighths are a block character in
+// the background color of the left paint, over the background of the right
+// one.
+//
+// It has no underline. A terminal draws the underline in the text color,
+// which in a split cell is the left paint's background, not a darker line:
+// under a cell half line pointers and half free space it showed as a bright
+// dash on the dark row. The escape sequence that gives the underline a color
+// of its own (SGR 58) is not understood by every terminal, so the one cell
+// goes without the line between rows instead.
+func splitSwatch(c cell) string {
+	profile := lipgloss.ColorProfile()
+
+	return profile.String(partialBlocks[c.eighths]).
+		Foreground(profile.Color(string(colorsOf(c.left).background))).
+		Background(profile.Color(string(colorsOf(c.right).background))).
+		String()
 }
 
 // cellRegion returns the region that owns most of the bytes in [start, end).
@@ -230,6 +358,12 @@ func columnScale(cells int) string {
 		label := fmt.Sprintf("+%d", offset)
 		if at+len(label) > len(line) {
 			break
+		}
+
+		// On a narrow grid the labels would run into each other, as in
+		// "+128+256": a label that does not leave a space is skipped.
+		if at > offsetLabel && line[at-1] != ' ' {
+			continue
 		}
 
 		copy(line[at:], []rune(label))

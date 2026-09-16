@@ -898,8 +898,10 @@ func (m Model) body() string {
 
 	panels := []string{listBox}
 
-	// The map takes what the other two panels leave: it is the one that can
-	// be drawn at any width.
+	// The map panel takes what the other two panels leave. The grid inside
+	// it does not: it is drawn at one of a few fixed widths (mapCells), so
+	// its scale holds while the window is resized, and the legend uses the
+	// rest.
 	if mapWidth := left - headerWidth - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
 		title := fmt.Sprintf("PAGE %d — %d BYTES", m.block, pgpage.PageSize)
 		content := pageMap(summary, cached, mapWidth-panelFrame)
