@@ -11,12 +11,17 @@ import (
 // fixtureHeap is the relation file shared with the pgpage package tests.
 const fixtureHeap = "../../testdata/heap_small"
 
-// runCommand runs the command line args and returns its exit code and
-// output.
+// runCommand runs the command line args with no input and returns its exit
+// code and output.
 func runCommand(args ...string) (code int, stdout, stderr string) {
+	return runCommandInput("", args...)
+}
+
+// runCommandInput is runCommand with stdin, for the commands that read keys.
+func runCommandInput(stdin string, args ...string) (code int, stdout, stderr string) {
 	var out, errOut bytes.Buffer
 
-	code = run(args, &out, &errOut)
+	code = run(args, strings.NewReader(stdin), &out, &errOut)
 
 	return code, out.String(), errOut.String()
 }

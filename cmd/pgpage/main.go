@@ -2,6 +2,7 @@
 //
 // Usage:
 //
+//	pgpage tui <relation-file>
 //	pgpage inspect <relation-file> [--block N]
 //	pgpage items <relation-file> [--block N]
 //	pgpage validate <relation-file>
@@ -27,24 +28,28 @@ const (
 const usage = `usage: pgpage <command> [arguments]
 
 commands:
+  tui <relation-file>                   explore the relation interactively
   inspect <relation-file> [--block N]   print the header of one page
   items <relation-file> [--block N]     list the line pointers and tuples of one page
   validate <relation-file>              check every page of a heap relation
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
 // run executes the command line args, without the program name, and returns
-// the exit code. It writes results to stdout and messages to stderr.
-func run(args []string, stdout, stderr io.Writer) int {
+// the exit code. It reads keys from stdin, writes results to stdout and
+// messages to stderr, so that tests can run a command without a terminal.
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, usage)
 		return exitUsage
 	}
 
 	switch args[0] {
+	case "tui":
+		return runTUI(args[1:], stdin, stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
 	case "items":
