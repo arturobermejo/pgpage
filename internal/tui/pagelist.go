@@ -1,0 +1,105 @@
+package tui
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/arturobermejo/pgpage"
+)
+
+// Styles of the page navigator.
+var (
+	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141"))
+	rowStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	moreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+)
+
+// pageList renders the page navigator: the block numbers of the relation,
+// the window of rows starting at top, with selected marked.
+//
+//	PAGES
+//	    0
+//	  > 1
+//	    2
+//	    ↓ 125 more
+func pageList(pages, selected, top pgpage.BlockNumber, rows int) string {
+	var b strings.Builder
+
+	b.WriteString(titleStyle.Render("PAGES"))
+
+	if pages == 0 {
+		b.WriteString("\n" + moreStyle.Render("no complete pages"))
+		return b.String()
+	}
+
+	last := lastVisible(pages, top, rows)
+
+	// Every number is right aligned to the width of the largest one, so the
+	// digits line up however many pages the relation has.
+	digits := len(fmt.Sprint(pages - 1))
+
+	for block := top; block <= last; block++ {
+		row := fmt.Sprintf("%*d", digits, block)
+
+		if block == selected {
+			b.WriteString("\n" + selectedStyle.Render("> "+row))
+			continue
+		}
+
+		b.WriteString("\n" + rowStyle.Render("  "+row))
+	}
+
+	if hidden := pages - 1 - last; hidden > 0 {
+		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("  ↓ %d more", hidden)))
+	}
+
+	return b.String()
+}
+
+// lastVisible returns the last block the window shows: rows blocks starting
+// at top, without running past the end of the relation.
+func lastVisible(pages, top pgpage.BlockNumber, rows int) pgpage.BlockNumber {
+	if rows < 1 {
+		rows = 1
+	}
+
+	// uint64 because top+rows can be past the largest block number.
+	last := uint64(top) + uint64(rows) - 1
+	if last > uint64(pages-1) {
+		last = uint64(pages - 1)
+	}
+
+	return pgpage.BlockNumber(last)
+}
+
+// scrollTo returns the first block the navigator must show so that selected
+// is inside a window of rows blocks. The list stays still while the
+// selection is visible, and follows it by the least amount when it is not.
+func scrollTo(pages, top, selected pgpage.BlockNumber, rows int) pgpage.BlockNumber {
+	if rows < 1 {
+		rows = 1
+	}
+
+	switch {
+	case selected < top:
+		top = selected // moved up, past the top of the window
+
+	case uint64(selected) >= uint64(top)+uint64(rows):
+		top = selected - pgpage.BlockNumber(rows) + 1 // moved down, past the bottom
+	}
+
+	// Leave no empty rows at the bottom while there are blocks above the
+	// window that could fill them, which is what a window made taller does.
+	if uint64(top)+uint64(rows) > uint64(pages) {
+		if uint64(rows) >= uint64(pages) {
+			return 0
+		}
+
+		return pages - pgpage.BlockNumber(rows)
+	}
+
+	return top
+}

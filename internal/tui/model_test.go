@@ -2,6 +2,8 @@ package tui
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,27 @@ import (
 
 // fixtureHeap is the relation file shared with the pgpage package tests.
 const fixtureHeap = "../../testdata/heap_small"
+
+// openRelation opens a relation of pages zeroed pages, for the tests that
+// need more blocks than the fixture has. Only its size matters here: the
+// navigator lists block numbers, it does not read pages yet.
+func openRelation(t *testing.T, pages int) *pgpage.Relation {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "relation")
+	if err := os.WriteFile(path, make([]byte, pages*pgpage.PageSize), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rel, err := pgpage.OpenRelation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { rel.Close() })
+
+	return rel
+}
 
 // openFixture opens the fixture relation and closes it when the test ends.
 func openFixture(t *testing.T) *pgpage.Relation {
@@ -35,7 +58,7 @@ func TestModelView(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{fixtureHeap, "3 pages", "24.0 KB", "blk 0/2", "q: quit"} {
+	for _, want := range []string{fixtureHeap, "3 pages", "24.0 KB", "blk 0/2", "PAGES", "> 0", "q quit"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -68,7 +91,7 @@ func TestModelUpdate(t *testing.T) {
 		{name: "q quits", msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}, quit: true},
 		{name: "esc quits", msg: tea.KeyMsg{Type: tea.KeyEsc}, quit: true},
 		{name: "ctrl+c quits", msg: tea.KeyMsg{Type: tea.KeyCtrlC}, quit: true},
-		{name: "another key does nothing", msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}},
+		{name: "an unbound key does nothing", msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("z")}},
 		{name: "an unknown message does nothing", msg: struct{}{}},
 	}
 
@@ -144,5 +167,137 @@ func TestRun(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		// Do not read out here: the program still writes to it.
 		t.Fatal("Run did not return after q")
+	}
+}
+
+// key returns the message Bubble Tea sends for a key name, the same names
+// Update matches on.
+func key(name string) tea.KeyMsg {
+	types := map[string]tea.KeyType{
+		"up":     tea.KeyUp,
+		"down":   tea.KeyDown,
+		"pgup":   tea.KeyPgUp,
+		"pgdown": tea.KeyPgDown,
+		"home":   tea.KeyHome,
+		"end":    tea.KeyEnd,
+	}
+
+	if t, ok := types[name]; ok {
+		return tea.KeyMsg{Type: t}
+	}
+
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
+}
+
+// press sends the keys to the model one at a time, as the runtime does.
+func press(t *testing.T, m Model, keys ...string) Model {
+	t.Helper()
+
+	for _, name := range keys {
+		next, _ := m.Update(key(name))
+
+		m, _ = next.(Model)
+	}
+
+	return m
+}
+
+// The keys of the navigator move the selection and scroll the list. With a
+// height of 16 the window holds 10 rows.
+func TestModelNavigation(t *testing.T) {
+	tests := []struct {
+		name  string
+		keys  []string
+		block pgpage.BlockNumber
+		top   pgpage.BlockNumber
+	}{
+		{name: "no keys", block: 0, top: 0},
+		{name: "down twice", keys: []string{"down", "down"}, block: 2, top: 0},
+		{name: "j and k are the same keys", keys: []string{"j", "j", "k"}, block: 1, top: 0},
+		{name: "up stops at the first block", keys: []string{"up", "up"}, block: 0, top: 0},
+		{name: "the list scrolls when the selection reaches the bottom", keys: repeat("down", 11), block: 11, top: 2},
+		{name: "end goes to the last block", keys: []string{"end"}, block: 19, top: 10},
+		{name: "home comes back", keys: []string{"end", "home"}, block: 0, top: 0},
+		{name: "pgdown moves a windowful", keys: []string{"pgdown"}, block: 10, top: 1},
+		{name: "pgdown stops at the last block", keys: []string{"pgdown", "pgdown", "pgdown"}, block: 19, top: 10},
+		{name: "pgup from the end", keys: []string{"end", "pgup"}, block: 9, top: 9},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := New(openRelation(t, 20))
+			m.width, m.height = 80, 16
+
+			m = press(t, m, tt.keys...)
+
+			if m.block != tt.block || m.top != tt.top {
+				t.Errorf("block = %d, top = %d; want %d and %d", m.block, m.top, tt.block, tt.top)
+			}
+
+			if m.block < m.top || uint64(m.block) >= uint64(m.top)+uint64(m.visibleRows()) {
+				t.Errorf("block %d is outside the window [%d, %d)", m.block, m.top, int(m.top)+m.visibleRows())
+			}
+		})
+	}
+}
+
+// repeat returns the key n times.
+func repeat(name string, n int) []string {
+	keys := make([]string, n)
+	for i := range keys {
+		keys[i] = name
+	}
+
+	return keys
+}
+
+// The screen shows the selection moving, not just the model.
+func TestModelNavigationView(t *testing.T) {
+	m := New(openRelation(t, 20))
+	m.width, m.height = 80, 16
+
+	m.width = 200 // wide enough for the long path of a temporary directory
+
+	view := press(t, m, "end").View()
+
+	if !strings.Contains(view, "> 19") || !strings.Contains(view, "blk 19/19") {
+		t.Errorf("view after end:\n%s", view)
+	}
+
+	if strings.Contains(view, "more") {
+		t.Errorf("the last window has nothing below it:\n%s", view)
+	}
+}
+
+// A relation with no complete page has nothing to select, and the keys must
+// not take the selection anywhere.
+func TestModelNavigationEmptyRelation(t *testing.T) {
+	m := New(openRelation(t, 0))
+	m.width, m.height = 80, 16
+
+	m = press(t, m, "down", "end", "pgdown")
+
+	if m.block != 0 || m.top != 0 {
+		t.Errorf("block = %d, top = %d; want 0 and 0", m.block, m.top)
+	}
+}
+
+// A shorter terminal holds fewer rows, so the list scrolls to keep the
+// selection on screen.
+func TestModelResizeScrolls(t *testing.T) {
+	m := New(openRelation(t, 20))
+	m.width, m.height = 80, 16
+
+	m = press(t, m, "end") // block 19, window 10..19
+
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 9}) // 3 rows
+	m, _ = next.(Model)
+
+	if m.visibleRows() != 3 {
+		t.Fatalf("visibleRows = %d, want 3", m.visibleRows())
+	}
+
+	if m.block != 19 || m.top != 17 {
+		t.Errorf("block = %d, top = %d; want 19 and 17", m.block, m.top)
 	}
 }
