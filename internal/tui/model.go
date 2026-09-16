@@ -100,7 +100,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The size is state like any other: it arrives as a message and the
 		// views read it from the model when they are drawn.
 		m.width, m.height = msg.Width, msg.Height
-		m.help.Width = msg.Width
+		m.help.Width = m.innerWidth()
+		m.help.Styles.ShortKey, m.help.Styles.ShortDesc, m.help.Styles.ShortSeparator = helpStyles()
+		m.help.Styles.FullKey, m.help.Styles.FullDesc, m.help.Styles.FullSeparator = helpStyles()
 
 		// A window of a different height holds a different number of rows,
 		// so the navigator may have to scroll to keep showing the selection,
@@ -258,93 +260,168 @@ func (m Model) View() string {
 	}
 
 	if m.showHelp {
-		body = m.clip(helpScreen(m.help, keys))
+		content := helpScreen(m.help, keys)
+		width := m.innerWidth()
+
+		if width <= 0 {
+			width = boxWidth("KEYS", content)
+		}
+
+		body = panel("KEYS", content, width, m.bodyHeight(content), borderStyle)
 		footer = m.help.ShortHelpView([]key.Binding{keys.Help, keys.Back})
 	}
 
+	width := m.innerWidth()
+
 	screen := strings.Join([]string{
-		topBar(m.rel, m.block, m.width),
-		"",
+		topBar(m.rel, m.block, width),
+		rule(width),
 		body,
-		"",
+		rule(width),
 		footer,
 	}, "\n")
 
-	if m.width > 0 {
+	if width > 0 {
 		// The last word on the size of the screen: a line wider than the
 		// terminal would wrap and push everything below it down. Panels are
 		// laid out to fit, but fixed text such as the help line is not.
-		screen = lipgloss.NewStyle().MaxWidth(m.width).Render(screen)
+		screen = lipgloss.NewStyle().MaxWidth(width).Render(screen)
 	}
+
+	// The same margin on both sides: every line starts after it, and none
+	// reaches the last columns, since everything was laid out to width.
+	lines := strings.Split(screen, "\n")
+	for i, line := range lines {
+		lines[i] = screenMargin + line
+	}
+
+	screen = strings.Join(lines, "\n")
 
 	return screen + "\n"
 }
 
-// panelGap separates the panels of the body.
-const panelGap = "   "
+// panelGap separates the panels of the body. One column looks as wide as
+// the one row between the panels and the rules above and below them, since a
+// terminal cell is about twice as tall as it is wide.
+const panelGap = " "
 
-// minMapWidth is the narrowest page map worth drawing. Below it the bar
-// cannot tell the regions apart and the legend does not fit.
-const minMapWidth = 28
+// screenMargin separates the screen from the left and right edges of the
+// terminal. It is the gap between panels, so every separation on screen
+// looks the same.
+const screenMargin = panelGap
+
+// innerWidth returns the columns the screen is laid out in: the terminal
+// minus the margin on each side. It is zero while the size is unknown.
+func (m Model) innerWidth() int {
+	if m.width <= 0 {
+		return 0
+	}
+
+	return max(m.width-2*lipgloss.Width(screenMargin), 0)
+}
+
+// Widths a panel needs around its content: two borders and the padding.
+const panelFrame = 2 + 2*panelPadding
+
+// The narrowest page map worth drawing, and how wide the panels beside the
+// navigator may be while the terminal size is unknown.
+const (
+	minMapWidth        = minMapCells + offsetLabel + panelFrame
+	defaultDetailWidth = 64
+)
 
 // body renders the panels side by side: the navigator, the page map and the
-// page header. Panels are dropped, widest first, when the terminal cannot
-// hold them; the navigator is the one the keys act on, so it always stays.
+// page header, each in its own frame. Panels are dropped when the terminal
+// cannot hold them; the navigator is the one the keys act on, so it stays.
 func (m Model) body() string {
-	list := pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries)
-
 	summary, cached := m.summaries[m.block]
+
+	list := pageList(m.rel.PageCount(), m.block, m.top, m.visibleRows(), m.summaries)
+	height := m.bodyHeight(list)
+
+	listBox := panel("PAGES", list, boxWidth("PAGES", list), height, borderStyle)
 	if m.rel.PageCount() == 0 {
-		return list
+		return listBox
 	}
 
-	panels := []string{list}
-	left := m.width - lipgloss.Width(list) - lipgloss.Width(panelGap)
-
-	if m.width <= 0 {
-		left = defaultDetailWidth
-	}
+	left := m.detailWidth(listBox)
 
 	// A page with no layout gets a panel of its own instead of a map and a
 	// header full of dashes.
 	if cached && summary.Status != pgpage.StatusOK {
-		if left < minStatusWidth {
-			return list
+		if left < minStatusWidth+panelFrame {
+			return listBox
 		}
 
 		// Sentences are read line by line: past some length the eye loses
 		// the start of the next one, so the panel does not take the whole
 		// terminal however wide it is.
-		panel := statusPanel(m.block, summary, min(left, maxStatusWidth))
+		title := statusTitle(m.block, summary)
+		width := min(left, maxStatusWidth+panelFrame)
+		box := panel(title, statusPanel(summary, width-panelFrame), width, height, borderStyle)
 
-		return m.clip(lipgloss.JoinHorizontal(lipgloss.Top, list, panelGap, panel))
+		return lipgloss.JoinHorizontal(lipgloss.Top, listBox, panelGap, box)
 	}
 
-	if header := headerPanel(summary, cached); m.width <= 0 || lipgloss.Width(header) <= left {
-		// The map takes what the other two panels leave: it is the one that
-		// can be drawn at any width.
-		if mapWidth := left - lipgloss.Width(header) - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
-			panels = append(panels, pageMap(m.block, summary, cached, mapWidth))
-		}
+	header := headerPanel(summary, cached)
+	headerWidth := headerBoxWidth(header)
 
-		panels = append(panels, header)
+	if headerWidth > left {
+		return listBox
 	}
 
-	return m.clip(lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...))
+	panels := []string{listBox}
+
+	// The map takes what the other two panels leave: it is the one that can
+	// be drawn at any width.
+	if mapWidth := left - headerWidth - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
+		title := fmt.Sprintf("PAGE %d — %d BYTES", m.block, pgpage.PageSize)
+		content := pageMap(summary, cached, mapWidth-panelFrame)
+
+		panels = append(panels, panel(title, content, mapWidth, height, borderStyle))
+	}
+
+	panels = append(panels, panel(headerTitle, header, headerWidth, height, borderStyle))
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, join(panels, panelGap)...)
 }
 
-// defaultDetailWidth is how wide the panels beside the navigator may be
-// while the terminal size is unknown.
-const defaultDetailWidth = 60
-
-// clip cuts a body taller than the terminal, which would otherwise scroll
-// the screen and break the drawing.
-func (m Model) clip(body string) string {
+// bodyHeight returns how many lines the framed panels take: everything the
+// terminal leaves, or what the navigator needs while the size is unknown.
+func (m Model) bodyHeight(list string) int {
 	if m.height <= 0 {
-		return body
+		return lipgloss.Height(list) + panelFrame
 	}
 
-	return lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(body)
+	return max(m.height-bodyChrome, 3)
+}
+
+// detailWidth returns the cells left for the panels beside the navigator.
+func (m Model) detailWidth(listBox string) int {
+	if m.width <= 0 {
+		return defaultDetailWidth
+	}
+
+	return m.innerWidth() - lipgloss.Width(listBox) - lipgloss.Width(panelGap)
+}
+
+// statusTitle names the panel of a page that has no layout.
+func statusTitle(block pgpage.BlockNumber, summary pgpage.PageSummary) string {
+	if summary.Status == pgpage.StatusNew {
+		return fmt.Sprintf("PAGE %d", block)
+	}
+
+	return fmt.Sprintf("BLOCK %d", block)
+}
+
+// clip cuts a block taller than the terminal, which would otherwise scroll
+// the screen and break the drawing.
+func (m Model) clip(block string) string {
+	if m.height <= 0 {
+		return block
+	}
+
+	return lipgloss.NewStyle().MaxHeight(m.height - bodyChrome).Render(block)
 }
 
 // join returns the blocks with sep between each pair, ready for

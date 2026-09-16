@@ -19,14 +19,11 @@ import (
 //	    2    0 items          —   NEW
 //	    ↓ 125 more
 func pageList(pages, selected, top pgpage.BlockNumber, rows int, summaries summaryCache) string {
-	var b strings.Builder
-
-	b.WriteString(titleStyle.Render("PAGES"))
-
 	if pages == 0 {
-		b.WriteString("\n" + moreStyle.Render("no complete pages"))
-		return b.String()
+		return moreStyle.Render("no complete pages")
 	}
+
+	var b strings.Builder
 
 	last := lastVisible(pages, top, rows)
 
@@ -39,11 +36,11 @@ func pageList(pages, selected, top pgpage.BlockNumber, rows int, summaries summa
 		row := fmt.Sprintf("%*d %s", digits, block, summaryColumns(summary, cached))
 
 		if block == selected {
-			b.WriteString("\n" + selectedStyle.Render("> ") + rowStyle.Render(row))
+			b.WriteString(prefix(block, top) + selectedStyle.Render("> "+row))
 			continue
 		}
 
-		b.WriteString("\n  " + rowStyle.Render(row))
+		b.WriteString(prefix(block, top) + "  " + rowStyle.Render(row))
 	}
 
 	if hidden := pages - 1 - last; hidden > 0 {
@@ -51,6 +48,15 @@ func pageList(pages, selected, top pgpage.BlockNumber, rows int, summaries summa
 	}
 
 	return b.String()
+}
+
+// prefix returns the line break before a row, except before the first one.
+func prefix(block, top pgpage.BlockNumber) string {
+	if block == top {
+		return ""
+	}
+
+	return "\n"
 }
 
 // summaryColumns returns the columns the navigator shows about a page: how

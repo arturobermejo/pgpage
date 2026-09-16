@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -12,6 +13,30 @@ import (
 // fieldColumn is the width of the field names of a panel, the longest one
 // plus a space.
 const fieldColumn = 16
+
+// headerTitle names the page header panel.
+const headerTitle = "PAGE HEADER"
+
+// headerValueWidth is the widest value the header panel can show: the
+// largest LSN, or the longest pd_flags name, since each flag goes on a line
+// of its own. The panel is always that wide, so it does not grow and push
+// the page map around when the selection moves onto a page with flags.
+var headerValueWidth = func() int {
+	width := lipgloss.Width(pgpage.LSN(math.MaxUint64).String())
+
+	for _, name := range pageFlagNames(pgpage.PageHasFreeLines | pgpage.PageFull | pgpage.PageAllVisible) {
+		width = max(width, lipgloss.Width(name))
+	}
+
+	return width
+}()
+
+// headerBoxWidth returns the width of the frame around the header panel:
+// the same for every page, unless content is wider than any page could make
+// it, as an error message can be.
+func headerBoxWidth(content string) int {
+	return max(boxWidth(headerTitle, content), fieldColumn+headerValueWidth+panelFrame)
+}
 
 // headerPanel renders what the page header of the selected page says: first
 // the fields as they are stored, then the values derived from them.
@@ -26,17 +51,14 @@ const fieldColumn = 16
 func headerPanel(summary pgpage.PageSummary, cached bool) string {
 	var b strings.Builder
 
-	b.WriteString(titleStyle.Render("PAGE HEADER"))
-
 	if !cached {
-		b.WriteString("\n" + moreStyle.Render("reading…"))
-		return b.String()
+		return moreStyle.Render("reading…")
 	}
 
 	if summary.Status != pgpage.StatusOK {
 		// A header that did not parse describes nothing. Step 25 gives these
 		// pages a view of their own.
-		b.WriteString("\n" + field("status", statusStyle(summary.Status).Render(summary.Status.String())))
+		b.WriteString(field("status", statusStyle(summary.Status).Render(summary.Status.String())))
 
 		if summary.Err != nil {
 			b.WriteString("\n" + field("error", invalidStyle.Render(summary.Err.Error())))
@@ -52,35 +74,84 @@ func headerPanel(summary pgpage.PageSummary, cached bool) string {
 		free = fmt.Sprintf("%.0f %%", percent)
 	}
 
-	rows := []struct{ name, value string }{
-		{"pd_lsn", h.LSN.String()},
-		{"pd_checksum", fmt.Sprint(h.Checksum)},
-		{"pd_flags", fmt.Sprintf("%#04x", uint16(h.Flags))},
-		{"pd_lower", fmt.Sprint(h.Lower)},
-		{"pd_upper", fmt.Sprint(h.Upper)},
-		{"pd_special", fmt.Sprint(h.Special)},
-		{"page size", fmt.Sprint(h.PageSize)},
-		{"layout version", fmt.Sprint(h.LayoutVersion)},
-		{"pd_prune_xid", fmt.Sprint(uint32(h.PruneXID))},
-		{"", ""}, // the line between what is stored and what is derived
-		{"items", fmt.Sprint(h.ItemCount())},
-		{"free space", fmt.Sprintf("%d B", h.FreeSpace())},
-		{"free", free},
-		{"flags decoded", pageFlagNames(h.Flags)},
+	// Values are plain text, except the two boundaries that the page map
+	// draws: pd_lower ends the line pointers and pd_upper starts the tuples,
+	// so they take the colors of those regions and the eye can match the
+	// number with the place on the map where one color turns into the next.
+	stored := []headerRow{
+		{"pd_lsn", h.LSN.String(), valueStyle},
+		{"pd_checksum", fmt.Sprint(h.Checksum), valueStyle},
+		{"pd_flags", fmt.Sprintf("%#04x", uint16(h.Flags)), valueStyle},
+		{"pd_lower", fmt.Sprint(h.Lower), regionText(pgpage.RegionLinePointers)},
+		{"pd_upper", fmt.Sprint(h.Upper), regionText(pgpage.RegionTuples)},
+		{"pd_special", fmt.Sprint(h.Special), valueStyle},
+		{"page size", fmt.Sprint(h.PageSize), valueStyle},
+		{"layout version", fmt.Sprint(h.LayoutVersion), valueStyle},
+		{"pd_prune_xid", fmt.Sprint(uint32(h.PruneXID)), valueStyle},
 	}
 
-	for _, row := range rows {
-		if row.name == "" {
-			b.WriteString("\n")
-			continue
+	derived := []headerRow{
+		{"items", fmt.Sprint(h.ItemCount()), valueStyle},
+		{"free space", fmt.Sprintf("%d B", h.FreeSpace()), valueStyle},
+		{"free", free, valueStyle},
+	}
+
+	// One flag per line, the name of the field on the first one only: the
+	// names are long, and listed side by side they would make the panel as
+	// wide as all of them together.
+	for i, name := range pageFlagNames(h.Flags) {
+		field := ""
+		if i == 0 {
+			field = "flags decoded"
 		}
 
-		b.WriteString("\n" + field(row.name, numberStyle.Render(row.value)))
+		derived = append(derived, headerRow{field, name, valueStyle})
 	}
 
-	b.WriteString("\n" + field("status", statusStyle(summary.Status).Render(summary.Status.String())))
+	derived = append(derived, headerRow{"status", summary.Status.String(), statusStyle(summary.Status)})
 
-	return b.String()
+	top, bottom := renderRows(stored), renderRows(derived)
+
+	// The rule between what is stored on disk and what is computed from it
+	// spans the panel, which is as wide as its widest possible line.
+	width := max(maxWidth(top), maxWidth(bottom), fieldColumn+headerValueWidth)
+
+	return strings.Join(top, "\n") + "\n\n" + ruleStyle.Render(strings.Repeat(borderHorizontal, width)) +
+		"\n\n" + strings.Join(bottom, "\n")
+}
+
+// headerRow is one field of the header panel and the style of its value.
+type headerRow struct {
+	name  string
+	value string
+	style lipgloss.Style
+}
+
+// renderRows returns one "name  value" line per row.
+func renderRows(rows []headerRow) []string {
+	lines := make([]string, len(rows))
+
+	for i, row := range rows {
+		lines[i] = fieldStyle.Render(padRight(row.name, fieldColumn)) + row.style.Render(row.value)
+	}
+
+	return lines
+}
+
+// maxWidth returns the width of the widest line.
+func maxWidth(lines []string) int {
+	var width int
+
+	for _, line := range lines {
+		width = max(width, lipgloss.Width(line))
+	}
+
+	return width
+}
+
+// regionText returns a text style in the color of a region of the page map.
+func regionText(kind pgpage.RegionKind) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(regionPalette[kind].background)
 }
 
 // field renders one "name  value" line of a panel.
@@ -100,7 +171,7 @@ func padRight(s string, width int) string {
 
 // pageFlagNames returns the names of the pd_flags bits that are set, as
 // PostgreSQL spells them, or a dash when none is.
-func pageFlagNames(flags pgpage.PageFlags) string {
+func pageFlagNames(flags pgpage.PageFlags) []string {
 	var names []string
 
 	if flags.HasFreeLines() {
@@ -116,8 +187,8 @@ func pageFlagNames(flags pgpage.PageFlags) string {
 	}
 
 	if len(names) == 0 {
-		return "—"
+		return []string{"—"}
 	}
 
-	return strings.Join(names, ",")
+	return names
 }

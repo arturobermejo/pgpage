@@ -35,7 +35,7 @@ func TestHeaderPanel(t *testing.T) {
 
 	rows := map[string]string{}
 
-	for _, line := range strings.Split(panel, "\n")[1:] {
+	for _, line := range strings.Split(panel, "\n") {
 		if name, value, ok := splitField(line); ok {
 			rows[name] = value
 		}
@@ -52,9 +52,10 @@ func TestHeaderPanel(t *testing.T) {
 	}
 }
 
-// splitField takes a "name   value" line apart at the field column.
+// splitField takes a "name   value" line apart at the field column. Blank
+// lines and the rule between the two groups of fields are not fields.
 func splitField(line string) (name, value string, ok bool) {
-	if len(line) < fieldColumn {
+	if len(line) < fieldColumn || strings.HasPrefix(line, borderHorizontal) {
 		return "", "", false
 	}
 
@@ -69,14 +70,18 @@ func splitField(line string) (name, value string, ok bool) {
 func TestHeaderPanelAligns(t *testing.T) {
 	panel := headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true)
 
-	for _, line := range strings.Split(panel, "\n")[1:] {
-		if strings.TrimSpace(line) == "" {
+	for _, line := range strings.Split(panel, "\n") {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, borderHorizontal) {
 			continue
 		}
 
 		name, _, ok := splitField(line)
 		if !ok {
-			t.Errorf("line %q does not have a field name", line)
+			// A flag after the first one continues the field above it.
+			if !strings.HasPrefix(line, strings.Repeat(" ", fieldColumn)) {
+				t.Errorf("line %q does not have a field name", line)
+			}
+
 			continue
 		}
 
@@ -98,7 +103,7 @@ func TestHeaderPanelNotOK(t *testing.T) {
 	}{
 		{
 			name:   "not read yet",
-			want:   []string{"PAGE HEADER", "reading…"},
+			want:   []string{"reading…"},
 			absent: []string{"pd_lsn", "status"},
 		},
 		{
@@ -139,21 +144,148 @@ func TestHeaderPanelNotOK(t *testing.T) {
 func TestPageFlagNames(t *testing.T) {
 	tests := []struct {
 		flags pgpage.PageFlags
-		want  string
+		want  []string
 	}{
-		{flags: 0, want: "—"},
-		{flags: pgpage.PageHasFreeLines, want: "HAS_FREE_LINES"},
-		{flags: pgpage.PageAllVisible, want: "ALL_VISIBLE"},
-		{flags: pgpage.PageFull | pgpage.PageAllVisible, want: "FULL,ALL_VISIBLE"},
+		{flags: 0, want: []string{"—"}},
+		{flags: pgpage.PageHasFreeLines, want: []string{"HAS_FREE_LINES"}},
+		{flags: pgpage.PageAllVisible, want: []string{"ALL_VISIBLE"}},
+		{flags: pgpage.PageFull | pgpage.PageAllVisible, want: []string{"FULL", "ALL_VISIBLE"}},
 		{
 			flags: pgpage.PageHasFreeLines | pgpage.PageFull | pgpage.PageAllVisible,
-			want:  "HAS_FREE_LINES,FULL,ALL_VISIBLE",
+			want:  []string{"HAS_FREE_LINES", "FULL", "ALL_VISIBLE"},
 		},
 	}
 
 	for _, tt := range tests {
-		if got := pageFlagNames(tt.flags); got != tt.want {
+		if got := pageFlagNames(tt.flags); strings.Join(got, ",") != strings.Join(tt.want, ",") {
 			t.Errorf("pageFlagNames(%#04x) = %q, want %q", uint16(tt.flags), got, tt.want)
 		}
 	}
+}
+
+// Each flag of a page goes on a line of its own, lined up under the first
+// one, so that the panel stays narrow.
+func TestHeaderPanelFlagsOnePerLine(t *testing.T) {
+	summary := withFlags(pgpage.SummarizePage(fixturePage(t, 0)),
+		pgpage.PageHasFreeLines|pgpage.PageFull|pgpage.PageAllVisible)
+
+	lines := strings.Split(headerPanel(summary, true), "\n")
+
+	want := []string{"flags decoded", "", ""}
+	names := []string{"HAS_FREE_LINES", "FULL", "ALL_VISIBLE"}
+
+	first := -1
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, "flags decoded") {
+			first = i
+		}
+	}
+
+	if first < 0 || first+len(names) > len(lines) {
+		t.Fatalf("no flags decoded field:\n%s", strings.Join(lines, "\n"))
+	}
+
+	for i, name := range names {
+		line := lines[first+i]
+
+		if got := strings.TrimSpace(line[:fieldColumn]); got != want[i] {
+			t.Errorf("line %d has field %q, want %q", i, got, want[i])
+		}
+
+		if got := strings.TrimSpace(line[fieldColumn:]); got != name {
+			t.Errorf("line %d shows %q, want the flag %q", i, got, name)
+		}
+	}
+}
+
+// The stored fields and the derived ones are separated by a rule.
+func TestHeaderPanelRule(t *testing.T) {
+	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true), "\n")
+
+	var rule, before, after int
+
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, borderHorizontal):
+			rule = i
+		case strings.HasPrefix(line, "pd_prune_xid"):
+			before = i
+		case strings.HasPrefix(line, "items"):
+			after = i
+		}
+	}
+
+	if rule == 0 || before >= rule || rule >= after {
+		t.Errorf("no rule between pd_prune_xid (line %d) and items (line %d), rule at %d:\n%s",
+			before, after, rule, strings.Join(lines, "\n"))
+	}
+}
+
+// pd_lower and pd_upper take the colors of the regions they bound on the
+// map, and the status the color of its state; the rest is plain text.
+func TestHeaderPanelColors(t *testing.T) {
+	withColor(t)
+
+	lines := strings.Split(headerPanel(pgpage.SummarizePage(fixturePage(t, 0)), true), "\n")
+
+	colors := map[string]string{
+		"pd_lower": "38;5;109", // line pointers
+		"pd_upper": "38;5;144", // tuples
+		"status":   "38;5;114", // OK
+		"pd_lsn":   "38;5;255", // plain value
+	}
+
+	for name, color := range colors {
+		found := false
+
+		for _, line := range lines {
+			if strings.Contains(line, name) {
+				found = true
+
+				if !strings.Contains(line, color) {
+					t.Errorf("%s is not drawn in %s:\n%q", name, color, line)
+				}
+			}
+		}
+
+		if !found {
+			t.Errorf("no line for %s", name)
+		}
+	}
+}
+
+// The header panel is as wide on a page with every flag set as on a page
+// with none, so moving the selection does not resize the panels around it.
+func TestHeaderBoxWidthIsStable(t *testing.T) {
+	plain := pgpage.SummarizePage(fixturePage(t, 0))
+
+	flagged := plain
+	flagged.Header.Flags = pgpage.PageHasFreeLines | pgpage.PageFull | pgpage.PageAllVisible
+
+	contents := map[string]string{
+		"no flags":      headerPanel(plain, true),
+		"every flag":    headerPanel(flagged, true),
+		"not read yet":  headerPanel(pgpage.PageSummary{}, false),
+		"one flag only": headerPanel(withFlags(plain, pgpage.PageAllVisible), true),
+	}
+
+	want := headerBoxWidth(contents["no flags"])
+
+	for name, content := range contents {
+		if got := headerBoxWidth(content); got != want {
+			t.Errorf("%s: header box is %d cells wide, want %d like every other page", name, got, want)
+		}
+
+		if lipgloss.Width(content)+panelFrame > want {
+			t.Errorf("%s: content is wider than the box:\n%s", name, content)
+		}
+	}
+}
+
+// withFlags returns summary with its pd_flags replaced.
+func withFlags(summary pgpage.PageSummary, flags pgpage.PageFlags) pgpage.PageSummary {
+	summary.Header.Flags = flags
+
+	return summary
 }

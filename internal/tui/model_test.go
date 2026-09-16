@@ -481,7 +481,7 @@ func TestModelBodyMap(t *testing.T) {
 		gone  []string
 	}{
 		{name: "three panels", width: 140, want: []string{"PAGES", "PAGE 0 — 8192 BYTES", "PAGE HEADER"}},
-		{name: "no room for the map", width: 70, want: []string{"PAGES", "PAGE HEADER"}, gone: []string{"BYTES"}},
+		{name: "no room for the map", width: 95, want: []string{"PAGES", "PAGE HEADER"}, gone: []string{"BYTES"}},
 		{name: "only the navigator", width: 40, want: []string{"PAGES"}, gone: []string{"BYTES", "PAGE HEADER"}},
 	}
 
@@ -789,5 +789,68 @@ func TestModelPromptCancel(t *testing.T) {
 
 	if !strings.Contains(m.View(), "next page") {
 		t.Errorf("the help line did not come back:\n%s", m.View())
+	}
+}
+
+// Panels are drawn side by side, so every framed line of the body has to be
+// the same width: one cell of drift and the borders no longer line up.
+func TestModelPanelsAlign(t *testing.T) {
+	sizes := [][2]int{{150, 28}, {120, 24}, {100, 18}, {80, 14}, {70, 16}}
+
+	for _, size := range sizes {
+		views := map[string]string{
+			"pages": loaded(t, size[0], size[1]).View(),
+			"help":  press(t, loaded(t, size[0], size[1]), "?").View(),
+		}
+
+		for name, view := range views {
+			var width int
+
+			for _, line := range strings.Split(view, "\n") {
+				if !strings.ContainsAny(line, borderTopLeft+borderVertical+borderBottomLeft) {
+					continue
+				}
+
+				got := lipgloss.Width(line)
+				if width == 0 {
+					width = got
+					continue
+				}
+
+				if got != width {
+					t.Errorf("%s at %dx%d: a framed line is %d cells wide, another %d:\n%s",
+						name, size[0], size[1], got, width, view)
+
+					break
+				}
+			}
+		}
+	}
+}
+
+// The screen keeps the same margin from both edges of the terminal: every
+// line starts after it, and none runs into the last columns.
+func TestModelScreenMargin(t *testing.T) {
+	margin := lipgloss.Width(screenMargin)
+
+	for _, width := range []int{60, 100, 150} {
+		views := map[string]string{
+			"pages":  loaded(t, width, 24).View(),
+			"help":   press(t, loaded(t, width, 24), "?").View(),
+			"prompt": press(t, loaded(t, width, 24), "g").View(),
+		}
+
+		for name, view := range views {
+			for i, line := range strings.Split(strings.TrimSuffix(view, "\n"), "\n") {
+				if !strings.HasPrefix(line, screenMargin) {
+					t.Errorf("%s at width %d: line %d does not start with the margin:\n%q", name, width, i, line)
+				}
+
+				if got := lipgloss.Width(strings.TrimRight(line, " ")); got > width-margin {
+					t.Errorf("%s at width %d: line %d reaches column %d, past the right margin",
+						name, width, i, got)
+				}
+			}
+		}
 	}
 }

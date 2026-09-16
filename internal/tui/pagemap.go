@@ -2,192 +2,264 @@ package tui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 
 	"github.com/arturobermejo/pgpage"
 )
 
-// Glyphs of the regions. They differ in shade and in pattern, so the map can
-// be read on a monochrome terminal, in a screenshot or by someone who does
-// not see the colors apart.
+// The map draws the page as a grid: one row per bytesPerRow bytes, the same
+// shape a hex dump has, so an offset is always in the same place on screen.
+const (
+	mapRows     = 16
+	bytesPerRow = pgpage.PageSize / mapRows // 512
+	offsetLabel = 7                         // "0x0000" and a space
+	minMapCells = 16
+)
+
+// cellGlyph is drawn in every cell of the map when the terminal shows color:
+// a thin line along the left edge of the cell, in a darker shade of the
+// region, over the region's background. A cell of the grid holds about 8
+// bytes, so the lines mark the page every 8 bytes.
+//
+// The line along the bottom, which keeps the rows apart, is not part of the
+// glyph: it is the terminal's underline, which a terminal draws in the text
+// color, so it takes the same darker shade (see swatch). No widely supported character has both lines. "🭼" does, but
+// it belongs to Symbols for Legacy Computing (Unicode 13), and fonts without
+// it showed question marks; "▏" comes from Block Elements, in Unicode since
+// 1.1, and underline is one of the oldest terminal attributes.
+const cellGlyph = "▏"
+
+// regionGlyph is what each region is drawn with when there is no color, as
+// on a monochrome terminal or in a plain text capture. There every cell would
+// be the same cellGlyph, so the regions need shapes of their own.
 var regionGlyph = map[pgpage.RegionKind]string{
 	pgpage.RegionHeader:       "█",
-	pgpage.RegionLinePointers: "▞",
-	pgpage.RegionFree:         "░",
-	pgpage.RegionTuples:       "▓",
-	pgpage.RegionSpecial:      "▚",
+	pgpage.RegionLinePointers: "╱",
+	pgpage.RegionFree:         "╎",
+	pgpage.RegionTuples:       "╲",
+	pgpage.RegionSpecial:      "╳",
 }
 
-// pageMap renders the page as a bar of width cells, where every region takes
-// a share of the bar proportional to its bytes, and a legend below it.
+// glyph returns what the cells of a region are drawn with on this terminal.
+func glyph(kind pgpage.RegionKind) string {
+	if lipgloss.ColorProfile() == termenv.Ascii {
+		return regionGlyph[kind]
+	}
+
+	return cellGlyph
+}
+
+// swatch returns n cells of a region, as the map draws them.
+func swatch(kind pgpage.RegionKind, n int) string {
+	if lipgloss.ColorProfile() == termenv.Ascii {
+		// Without color the glyphs alone tell the regions apart, and an
+		// underline would only add noise to a plain text capture.
+		return strings.Repeat(regionGlyph[kind], n)
+	}
+
+	// termenv, the library under Lip Gloss, styles the whole run with a
+	// single escape sequence. Lip Gloss would underline it one character at
+	// a time, which is 64 sequences for a row of a single region.
+	profile := lipgloss.ColorProfile()
+	colors := regionPalette[kind]
+
+	return profile.String(strings.Repeat(cellGlyph, n)).
+		Foreground(profile.Color(string(colors.line))).
+		Background(profile.Color(string(colors.background))).
+		Underline().
+		String()
+}
+
+// pageMap renders the page as a grid of width cells, with the byte offset of
+// each row on the left and a legend below:
 //
-//	PAGE 0 — 8192 BYTES
-//	0                                                              8192
-//	█▞▞▞▞▞░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
-//	█ Header 0-23 · 24 B
-//	▞ Line pointers 24-763 · 740 B
-func pageMap(block pgpage.BlockNumber, summary pgpage.PageSummary, cached bool, width int) string {
-	var b strings.Builder
-
-	b.WriteString(titleStyle.Render(fmt.Sprintf("PAGE %d — %d BYTES", block, pgpage.PageSize)))
-
+//	       +0        +128      +256      +384
+//	0x0000 ███╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱
+//	0x0200 ╱╱╱╱╱╱╱╱╱╱╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎╎
+//	...
+//	██ Header 0-23 · 24 B     ╱╱ Line ptrs 24-763 · 740 B
+//
+// That is how it looks without color; with color every cell is a cellGlyph
+// over the background of its region.
+func pageMap(summary pgpage.PageSummary, cached bool, width int) string {
 	if !cached {
-		b.WriteString("\n" + moreStyle.Render("reading…"))
-		return b.String()
+		return moreStyle.Render("reading…")
 	}
 
 	regions := pgpage.PageRegions(summary.Header)
 	if regions == nil {
 		// A new or invalid page has no layout to draw.
-		b.WriteString("\n" + moreStyle.Render("no layout: "+summary.Status.String()))
-		return b.String()
+		return moreStyle.Render("no layout: " + summary.Status.String())
 	}
 
-	cells := mapCells(regions, width)
-	if cells == nil {
-		b.WriteString("\n" + moreStyle.Render("too narrow"))
-		return b.String()
+	cells := width - offsetLabel
+	if cells < minMapCells {
+		return moreStyle.Render("too narrow")
 	}
 
-	b.WriteString("\n" + scale(width))
-	b.WriteString("\n" + bar(regions, cells))
+	var b strings.Builder
 
-	for i, region := range regions {
-		if region.Len() == 0 {
-			continue
-		}
+	b.WriteString(columnScale(cells))
 
-		b.WriteString("\n" + legend(region, cells[i]))
+	for row := range mapRows {
+		b.WriteString("\n" + offsetStyle.Render(fmt.Sprintf("0x%04X ", row*bytesPerRow)))
+		b.WriteString(mapRow(regions, row, cells))
 	}
+
+	b.WriteString("\n\n" + legend(regions, width))
 
 	return b.String()
 }
 
-// mapCells returns how many cells of a bar of width cells each region takes.
-//
-// Every region that has bytes gets one cell first: the 24-byte header is a
-// fifth of a cell in a 70-cell bar, and a map that rounded it away would
-// claim the page has no header. The rest of the bar is shared out in
-// proportion to the bytes, and the cells that rounding leaves over go to the
-// regions with the largest remainders, so the bar is exactly width cells.
-//
-// It returns nil when the bar cannot hold one cell per region with bytes.
-func mapCells(regions []pgpage.Region, width int) []int {
-	type share struct {
-		index     int
-		remainder float64
+// mapRow draws one row of the grid: cells cells covering the bytesPerRow
+// bytes that start at row*bytesPerRow.
+func mapRow(regions []pgpage.Region, row, cells int) string {
+	var (
+		b    strings.Builder
+		kind pgpage.RegionKind
+		run  int
+	)
+
+	base := row * bytesPerRow
+
+	for i := range cells {
+		// Cell boundaries are computed from the cell index, not accumulated,
+		// so rounding cannot drift along the row.
+		start := base + i*bytesPerRow/cells
+		end := base + (i+1)*bytesPerRow/cells
+
+		cell := cellRegion(regions, start, max(end, start+1))
+
+		// Consecutive cells of one region are styled together: one escape
+		// sequence for the run instead of one per cell.
+		if run > 0 && cell != kind {
+			b.WriteString(swatch(kind, run))
+
+			run = 0
+		}
+
+		kind = cell
+		run++
 	}
 
+	b.WriteString(swatch(kind, run))
+
+	return b.String()
+}
+
+// cellRegion returns the region that owns most of the bytes in [start, end).
+// A cell that straddles a boundary belongs to whichever side fills it more,
+// so one cell is never claimed by two regions.
+func cellRegion(regions []pgpage.Region, start, end int) pgpage.RegionKind {
 	var (
-		cells    = make([]int, len(regions))
-		shares   []share
-		nonEmpty int
+		best  pgpage.RegionKind
+		bytes int
 	)
 
 	for _, region := range regions {
-		if region.Len() > 0 {
-			nonEmpty++
+		overlap := min(end, region.End) - max(start, region.Start)
+		if overlap > bytes {
+			best, bytes = region.Kind, overlap
 		}
 	}
 
-	if nonEmpty == 0 || width < nonEmpty {
-		return nil
+	return best
+}
+
+// columnScale returns the ruler above the grid, marking byte offsets inside
+// a row every scaleStep bytes.
+func columnScale(cells int) string {
+	const scaleStep = 128
+
+	line := []rune(strings.Repeat(" ", offsetLabel+cells))
+
+	for offset := 0; offset < bytesPerRow; offset += scaleStep {
+		at := offsetLabel + offset*cells/bytesPerRow
+
+		label := fmt.Sprintf("+%d", offset)
+		if at+len(label) > len(line) {
+			break
+		}
+
+		copy(line[at:], []rune(label))
 	}
 
-	// One cell per region is spoken for; the rest is what gets shared out.
-	used, rest := nonEmpty, width-nonEmpty
+	return offsetStyle.Render(string(line))
+}
 
-	for i, region := range regions {
+// legend names every region that has bytes, with its range and its size,
+// in as many columns as width allows.
+func legend(regions []pgpage.Region, width int) string {
+	const gap = 2
+
+	var (
+		entries []string
+		longest int
+	)
+
+	for _, region := range regions {
 		if region.Len() == 0 {
 			continue
 		}
 
-		exact := float64(region.Len()) * float64(rest) / pgpage.PageSize
-		whole := int(exact)
+		entry := legendEntry(region)
+		longest = max(longest, lipgloss.Width(entry))
 
-		cells[i] = 1 + whole
-		used += whole
-
-		shares = append(shares, share{index: i, remainder: exact - float64(whole)})
+		entries = append(entries, entry)
 	}
 
-	// Largest remainder first, keeping the order of the page when two tie,
-	// so that the same page always yields the same bar.
-	sort.SliceStable(shares, func(a, b int) bool {
-		return shares[a].remainder > shares[b].remainder
-	})
+	// Columns are as wide as the longest entry, so they line up whatever the
+	// page holds: at least one, even when nothing really fits.
+	columns := max((width+gap)/(longest+gap), 1)
 
-	for i := 0; used < width; i++ {
-		cells[shares[i%len(shares)].index]++
-		used++
-	}
-
-	return cells
-}
-
-// bar returns the row of glyphs, cells[i] of them for each region.
-func bar(regions []pgpage.Region, cells []int) string {
 	var b strings.Builder
 
-	for i, region := range regions {
-		if cells[i] == 0 {
-			continue
+	for i, entry := range entries {
+		switch {
+		case i == 0:
+		case i%columns == 0:
+			b.WriteString("\n")
+		default:
+			b.WriteString(strings.Repeat(" ", gap+longest-lipgloss.Width(entries[i-1])))
 		}
 
-		b.WriteString(regionStyle(region.Kind).Render(strings.Repeat(regionGlyph[region.Kind], cells[i])))
+		b.WriteString(entry)
 	}
 
 	return b.String()
 }
 
-// scale returns the ruler above the bar: the first and last byte offsets of
-// the page, at the ends of the bar.
-func scale(width int) string {
-	const (
-		first = "0"
-		last  = "8192"
-	)
-
-	if width < len(first)+len(last)+1 {
-		return ""
-	}
-
-	return moreStyle.Render(first + strings.Repeat(" ", width-len(first)-len(last)) + last)
+// legendEntry returns "█ Header 0-23 · 24 B".
+func legendEntry(region pgpage.Region) string {
+	return legendSwatch(region.Kind) + " " +
+		valueStyle.Render(regionName(region.Kind)) + " " +
+		fieldStyle.Render(fmt.Sprintf("%d-%d · %d B", region.Start, region.End-1, region.Len()))
 }
 
-// legend returns the line that names one region, with its glyph, its byte
-// range and its size.
-func legend(region pgpage.Region, cells int) string {
-	style := regionStyle(region.Kind)
-
-	unit := "cells"
-	if cells == 1 {
-		unit = "cell"
+// legendSwatch returns the one cell that shows the color of a region in the
+// legend: its background alone, since the lines of the grid are there to keep
+// cells apart and one cell has nothing to be kept apart from. Without color
+// it is the region's glyph.
+func legendSwatch(kind pgpage.RegionKind) string {
+	if lipgloss.ColorProfile() == termenv.Ascii {
+		return regionGlyph[kind]
 	}
 
-	return style.Render(regionGlyph[region.Kind]) + " " +
-		valueStyle.Render(region.Kind.String()) + " " +
-		fieldStyle.Render(fmt.Sprintf("%d-%d · %d B · %d %s", region.Start, region.End-1, region.Len(), cells, unit))
+	return lipgloss.NewStyle().Background(regionPalette[kind].background).Render(" ")
 }
 
-// regionStyle returns the color of a region, which repeats the difference
-// its glyph already makes.
-func regionStyle(kind pgpage.RegionKind) lipgloss.Style {
+// regionName returns the name the legend uses, which is shorter than the one
+// the library spells out so that the entries fit in a couple of columns.
+func regionName(kind pgpage.RegionKind) string {
 	switch kind {
-	case pgpage.RegionHeader:
-		return headerRegionStyle
 	case pgpage.RegionLinePointers:
-		return itemsRegionStyle
+		return "Line ptrs"
 	case pgpage.RegionFree:
-		return freeRegionStyle
-	case pgpage.RegionTuples:
-		return tuplesRegionStyle
-	case pgpage.RegionSpecial:
-		return specialRegionStyle
+		return "Free"
 	default:
-		return moreStyle
+		return kind.String()
 	}
 }

@@ -25,9 +25,9 @@ func invalidSummary() pgpage.PageSummary {
 // A new page is not a problem, and its panel says what it is instead of
 // showing an error.
 func TestStatusPanelNew(t *testing.T) {
-	panel := statusPanel(17, pgpage.SummarizePage(make([]byte, pgpage.PageSize)), 60)
+	panel := statusPanel(pgpage.SummarizePage(make([]byte, pgpage.PageSize)), 60)
 
-	for _, want := range []string{"PAGE 17", "NEW PAGE", "all zeroes", "pd_lower 0"} {
+	for _, want := range []string{"NEW PAGE", "all zeroes", "pd_lower 0"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("panel does not contain %q:\n%s", want, panel)
 		}
@@ -45,10 +45,9 @@ func TestStatusPanelNew(t *testing.T) {
 func TestStatusPanelInvalid(t *testing.T) {
 	summary := invalidSummary()
 
-	panel := statusPanel(382, summary, 72)
+	panel := statusPanel(summary, 72)
 
 	for _, want := range []string{
-		"BLOCK 382",
 		"⚠ Invalid page header",
 		"lower=500 upper=100 special=8192",
 		"expected",
@@ -66,9 +65,9 @@ func TestStatusPanelInvalid(t *testing.T) {
 func TestStatusPanelUnreadable(t *testing.T) {
 	summary := pgpage.PageSummary{Status: pgpage.StatusUnknown, Err: errors.New("pgpage: input/output error")}
 
-	panel := statusPanel(4, summary, 60)
+	panel := statusPanel(summary, 60)
 
-	for _, want := range []string{"BLOCK 4", "could not be read", "input/output error"} {
+	for _, want := range []string{"could not be read", "input/output error"} {
 		if !strings.Contains(panel, want) {
 			t.Errorf("panel does not contain %q:\n%s", want, panel)
 		}
@@ -97,7 +96,7 @@ func TestStatusPanelWraps(t *testing.T) {
 
 	for _, summary := range summaries {
 		for _, width := range []int{minStatusWidth, 50, maxStatusWidth} {
-			panel := statusPanel(0, summary, width)
+			panel := statusPanel(summary, width)
 
 			for _, line := range strings.Split(panel, "\n") {
 				if got := lipgloss.Width(line); got > width {

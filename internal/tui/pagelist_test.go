@@ -7,9 +7,9 @@ import (
 	"github.com/arturobermejo/pgpage"
 )
 
-// rows returns the lines of a rendered navigator without its title.
+// rows returns the lines of a rendered navigator.
 func rows(list string) []string {
-	return strings.Split(list, "\n")[1:]
+	return strings.Split(list, "\n")
 }
 
 // The navigator lists the window of blocks that starts at top, marks the
@@ -51,10 +51,6 @@ func TestPageList(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			list := pageList(tt.pages, tt.selected, tt.top, tt.rows, summaryCache{})
-
-			if !strings.HasPrefix(list, "PAGES\n") && tt.pages != 0 {
-				t.Errorf("list does not start with its title:\n%s", list)
-			}
 
 			got := rows(list)
 			if len(got) != len(tt.want) {

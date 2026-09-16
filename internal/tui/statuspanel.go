@@ -19,21 +19,20 @@ const (
 // statusPanel renders a page that has no layout to show: one that was never
 // initialized, one whose header does not parse, or one that could not be
 // read. Each says what it is, why, and what can still be done with it.
-func statusPanel(block pgpage.BlockNumber, summary pgpage.PageSummary, width int) string {
+func statusPanel(summary pgpage.PageSummary, width int) string {
 	if summary.Status == pgpage.StatusNew {
-		return newPagePanel(block, width)
+		return newPagePanel(width)
 	}
 
-	return brokenPagePanel(block, summary, width)
+	return brokenPagePanel(summary, width)
 }
 
 // newPagePanel describes a page of 8192 zero bytes: not a problem, just a
 // page PostgreSQL has not used yet.
-func newPagePanel(block pgpage.BlockNumber, width int) string {
+func newPagePanel(width int) string {
 	center := lipgloss.NewStyle().Width(width).Align(lipgloss.Center)
 
 	return strings.Join([]string{
-		titleStyle.Render(fmt.Sprintf("PAGE %d", block)),
 		"",
 		center.Render(newStyle.Bold(true).Render("NEW PAGE")),
 		"",
@@ -46,7 +45,7 @@ func newPagePanel(block pgpage.BlockNumber, width int) string {
 
 // brokenPagePanel describes a page whose header could not be used, and shows
 // the parser's own words plus the rules the header has to meet.
-func brokenPagePanel(block pgpage.BlockNumber, summary pgpage.PageSummary, width int) string {
+func brokenPagePanel(summary pgpage.PageSummary, width int) string {
 	wrap := lipgloss.NewStyle().Width(width)
 
 	headline := "Invalid page header"
@@ -55,8 +54,6 @@ func brokenPagePanel(block pgpage.BlockNumber, summary pgpage.PageSummary, width
 	}
 
 	rows := []string{
-		titleStyle.Render(fmt.Sprintf("BLOCK %d", block)),
-		"",
 		invalidStyle.Render("⚠ " + headline),
 		"",
 	}

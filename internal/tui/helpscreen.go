@@ -12,7 +12,7 @@ import (
 // the panels apart line by line and pasting the box into them.
 func helpScreen(h help.Model, k keyMap) string {
 	return strings.Join([]string{
-		titleStyle.Render("KEYS") + "  " + moreStyle.Render("pgpage · read-only"),
+		moreStyle.Render("pgpage · read-only"),
 		"",
 		h.FullHelpView(k.FullHelp()),
 		"",
