@@ -19,7 +19,14 @@ import (
 // It is a value, not a pointer: Update receives a copy and returns the next
 // state, so a view can never be drawn from a model somebody else is changing.
 type Model struct {
-	rel *pgpage.Relation
+	rel   *pgpage.Relation
+	block pgpage.BlockNumber
+
+	// Size of the terminal, in cells. Both are zero until the first
+	// tea.WindowSizeMsg arrives, which Bubble Tea sends before anything
+	// else, so View must cope with not knowing the size yet.
+	width  int
+	height int
 }
 
 var _ tea.Model = Model{}
@@ -39,8 +46,14 @@ func (m Model) Init() tea.Cmd {
 // Update returns the state that msg leads to, and a command to run next.
 // Bubble Tea calls it once per message, never concurrently.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if key, ok := msg.(tea.KeyMsg); ok {
-		switch key.String() {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		// The size is state like any other: it arrives as a message and the
+		// views read it from the model when they are drawn.
+		m.width, m.height = msg.Width, msg.Height
+
+	case tea.KeyMsg:
+		switch msg.String() {
 		case "q", "esc", "ctrl+c":
 			// tea.Quit is a command, not an action: returning it asks the
 			// runtime to stop after this update.
@@ -54,8 +67,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // View returns the whole screen as text. It must not change the model nor
 // read anything but it: Bubble Tea may call it after any message.
 func (m Model) View() string {
-	return fmt.Sprintf("pgpage\n\n%s\n%d pages, %d bytes\n\nq: quit\n",
-		m.rel.Path(), m.rel.PageCount(), m.rel.Size())
+	return topBar(m.rel, m.block, m.width) + "\n\nq: quit\n"
 }
 
 // Run starts the explorer on rel and blocks until the user quits. It reads

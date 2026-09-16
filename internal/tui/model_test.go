@@ -31,12 +31,24 @@ func openFixture(t *testing.T) *pgpage.Relation {
 // The first screen names the relation and its size, so the user knows what
 // they opened.
 func TestModelView(t *testing.T) {
-	view := New(openFixture(t)).View()
+	m, _ := New(openFixture(t)).Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	for _, want := range []string{fixtureHeap, "3 pages", "24576 bytes", "q: quit"} {
+	view := m.View()
+
+	for _, want := range []string{fixtureHeap, "3 pages", "24.0 KB", "blk 0/2", "q: quit"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
+	}
+}
+
+// Before the first tea.WindowSizeMsg the size is unknown, and the view must
+// still draw something.
+func TestModelViewWithoutSize(t *testing.T) {
+	view := New(openFixture(t)).View()
+
+	if !strings.Contains(view, fixtureHeap) || strings.Contains(view, "blk") {
+		t.Errorf("view without a size:\n%s", view)
 	}
 }
 
@@ -57,7 +69,7 @@ func TestModelUpdate(t *testing.T) {
 		{name: "esc quits", msg: tea.KeyMsg{Type: tea.KeyEsc}, quit: true},
 		{name: "ctrl+c quits", msg: tea.KeyMsg{Type: tea.KeyCtrlC}, quit: true},
 		{name: "another key does nothing", msg: tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")}},
-		{name: "another message does nothing", msg: tea.WindowSizeMsg{Width: 80, Height: 24}},
+		{name: "an unknown message does nothing", msg: struct{}{}},
 	}
 
 	for _, tt := range tests {
@@ -74,6 +86,24 @@ func TestModelUpdate(t *testing.T) {
 				t.Errorf("quit = %v, want %v", quit, tt.quit)
 			}
 		})
+	}
+}
+
+// A resize is remembered, because the views are drawn to that width.
+func TestModelResize(t *testing.T) {
+	next, cmd := New(openFixture(t)).Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+
+	m, ok := next.(Model)
+	if !ok {
+		t.Fatalf("Update returned %T, want Model", next)
+	}
+
+	if m.width != 100 || m.height != 40 {
+		t.Errorf("size = %dx%d, want 100x40", m.width, m.height)
+	}
+
+	if cmd != nil {
+		t.Error("a resize returned a command, want none")
 	}
 }
 
