@@ -1,5 +1,6 @@
 # Binaries built with go build
 /pgpage
+/pgpage_v*
 *.exe
 *.exe~
 *.dll
