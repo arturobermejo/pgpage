@@ -1,2 +1,33 @@
+# Binaries built with go build
+/pgpage
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.*
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Vendored dependencies, if ever used
+vendor/
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
 .DS_Store
+
+# Environment files
+.env
+.env.*
+
+# Scratch files of this project
 tmp/
