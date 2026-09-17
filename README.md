@@ -14,6 +14,8 @@ uses it for.
 It never writes to the file. It reads the file as it is on disk, so pages
 that are only dirty in shared buffers are not seen until a checkpoint.
 
+![pgpage exploring a heap relation: the page list, the map of page 0 and its decoded header](assets/pgpage.png)
+
 ## Install
 
 pgpage is a single binary with no runtime dependencies. It needs Go 1.26 or
