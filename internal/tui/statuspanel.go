@@ -39,7 +39,7 @@ func newPagePanel(width int) string {
 		center.Render(valueStyle.Render("This page is all zeroes. PostgreSQL extended the relation " +
 			"but has not initialized this page yet.")),
 		"",
-		center.Render(fieldStyle.Render("pd_lower 0 · pd_upper 0 · pd_special 0 · items 0")),
+		center.Render(fieldStyle.Render("pd_lower 0 · pd_upper 0 · pd_special 0 · line pointers 0")),
 	}, "\n")
 }
 

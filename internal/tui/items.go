@@ -238,6 +238,10 @@ func itemPanel(it items) string {
 
 // itemHighlight returns the bytes of the selected line pointer's tuple, for
 // the page map to highlight, or nothing when it points to no storage.
+//
+// The label names the tuple by its TID, (block,line pointer), as PostgreSQL
+// does in t_ctid: a tuple has no number of its own, the number is the line
+// pointer's.
 func itemHighlight(it items) highlight {
 	if !it.loaded || it.selected >= len(it.ids) {
 		return highlight{}
@@ -254,10 +258,16 @@ func itemHighlight(it items) highlight {
 	return highlight{
 		start: int(id.Offset()),
 		end:   int(id.Offset()) + int(id.Length()),
-		label: fmt.Sprintf("item #%d", n),
+		label: "tuple " + tid(it).String(),
 	}
 }
 
 // itemPanelWidth is the widest value the line pointer panel shows, so that
 // the panel keeps its width while the selection moves.
 var itemPanelWidth = lipgloss.Width("bits 17-31 = 32767")
+
+// tid returns the TID of the selected line pointer's tuple: its block, and
+// the number of the line pointer that points to it.
+func tid(it items) pgpage.ItemPointer {
+	return pgpage.ItemPointer{Block: it.block, Offset: number(it.selected)}
+}

@@ -24,22 +24,22 @@ func TestPageList(t *testing.T) {
 		{
 			name:  "all the pages fit",
 			pages: 3, selected: 0, top: 0, rows: 10,
-			want: []string{"> 0 …", "  1 …", "  2 …"},
+			want: []string{"# LP FREE STATUS", "> 0 …", "  1 …", "  2 …"},
 		},
 		{
 			name:  "the window stops at the last block",
 			pages: 3, selected: 2, top: 1, rows: 10,
-			want: []string{"  1 …", "> 2 …"},
+			want: []string{"# LP FREE STATUS", "  1 …", "> 2 …"},
 		},
 		{
 			name:  "a window in the middle counts what is left below",
 			pages: 128, selected: 5, top: 4, rows: 3,
-			want: []string{"4 …", "> 5 …", "6 …", "↓ 121 more"},
+			want: []string{"# LP FREE STATUS", "4 …", "> 5 …", "6 …", "↓ 121 more"},
 		},
 		{
 			name:  "numbers line up on the width of the largest block",
 			pages: 128, selected: 127, top: 125, rows: 3,
-			want: []string{"  125 …", "  126 …", "> 127 …"},
+			want: []string{"# LP FREE STATUS", "  125 …", "  126 …", "> 127 …"},
 		},
 		{
 			name:  "an empty relation has no rows",
@@ -150,4 +150,24 @@ func walk(pages pgpage.BlockNumber) []pgpage.BlockNumber {
 	}
 
 	return blocks
+}
+
+// The column titles sit over the columns they name: each title ends where
+// the numbers under it end, since numbers are right aligned.
+func TestPageListColumnTitles(t *testing.T) {
+	summaries := summaryCache{0: pgpage.SummarizePage(fixturePage(t, 0), 0)}
+	lines := strings.Split(pageList(3, 0, 0, 3, summaries), "\n")
+
+	title, row := lines[0], lines[1] // "> 0  185   21%  OK"
+
+	for _, pair := range [][2]string{{"LP", "185"}, {"FREE", "21%"}} {
+		if end := column(title, pair[0]) + len(pair[0]); end != column(row, pair[1])+len(pair[1]) {
+			t.Errorf("%q ends at %d, but %q at %d:\n%s\n%s",
+				pair[0], end, pair[1], column(row, pair[1])+len(pair[1]), title, row)
+		}
+	}
+
+	if column(title, "STATUS") != column(row, "OK") {
+		t.Errorf("STATUS starts at %d, OK at %d:\n%s\n%s", column(title, "STATUS"), column(row, "OK"), title, row)
+	}
 }

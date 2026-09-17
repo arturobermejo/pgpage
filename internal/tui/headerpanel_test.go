@@ -27,7 +27,7 @@ func TestHeaderPanel(t *testing.T) {
 		"page size":      "8192",
 		"layout version": "4",
 		"pd_prune_xid":   "0",
-		"items":          "185",
+		"line pointers":  "185",
 		"free space":     "1708 B",
 		"free":           "21 %",
 		"checksum":       "OK",
@@ -120,7 +120,7 @@ func TestHeaderPanelNotOK(t *testing.T) {
 			summary: pgpage.PageSummary{Status: pgpage.StatusInvalid, Err: errors.New("lower past upper")},
 			cached:  true,
 			want:    []string{"status", "INVALID", "error", "lower past upper"},
-			absent:  []string{"pd_lsn", "items"},
+			absent:  []string{"pd_lsn", "line pointers"},
 		},
 	}
 
@@ -213,13 +213,13 @@ func TestHeaderPanelRule(t *testing.T) {
 			rule = i
 		case strings.HasPrefix(line, "pd_prune_xid"):
 			before = i
-		case strings.HasPrefix(line, "items"):
+		case strings.HasPrefix(line, "line pointers"):
 			after = i
 		}
 	}
 
 	if rule == 0 || before >= rule || rule >= after {
-		t.Errorf("no rule between pd_prune_xid (line %d) and items (line %d), rule at %d:\n%s",
+		t.Errorf("no rule between pd_prune_xid (line %d) and line pointers (line %d), rule at %d:\n%s",
 			before, after, rule, strings.Join(lines, "\n"))
 	}
 }

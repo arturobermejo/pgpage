@@ -13,11 +13,14 @@ import (
 // the window of rows starting at top, with selected marked and what the
 // cache knows about each page.
 //
-//	PAGES
-//	    0   12 items   93% free   OK
-//	  > 1   41 items   73% free   OK
-//	    2    0 items          —   NEW
-//	    ↓ 125 more
+//	  #   LP  FREE  STATUS
+//	  0   12   93%  OK
+//	> 1   41   73%  OK
+//	  2    0     —  NEW
+//	  ↓ 125 more
+//
+// LP is the number of line pointers, not of tuples: the array keeps unused
+// and dead line pointers too.
 func pageList(pages, selected, top pgpage.BlockNumber, rows int, summaries summaryCache) string {
 	if pages == 0 {
 		return moreStyle.Render("no complete pages")
@@ -30,6 +33,10 @@ func pageList(pages, selected, top pgpage.BlockNumber, rows int, summaries summa
 	// Every number is right aligned to the width of the largest one, so the
 	// digits line up however many pages the relation has.
 	digits := len(fmt.Sprint(pages - 1))
+
+	// The columns are named once, above them, instead of in every row.
+	b.WriteString(fieldStyle.Render(fmt.Sprintf("  %*s %s  %s  %s",
+		digits, "#", padLeft("LP", lpColumn), padLeft("FREE", freeColumn), "STATUS")) + "\n")
 
 	for block := top; block <= last; block++ {
 		summary, cached := summaries[block]
@@ -59,6 +66,13 @@ func prefix(block, top pgpage.BlockNumber) string {
 	return "\n"
 }
 
+// Widths of the columns of the navigator: the most line pointers a page can
+// hold, (8192 - 24) / 4 = 2042, and "100%".
+const (
+	lpColumn   = 4
+	freeColumn = 4
+)
+
 // summaryColumns returns the columns the navigator shows about a page: how
 // many line pointers it has, how much of it is free and its status. A page
 // the cache does not hold yet shows an ellipsis, and a page whose header
@@ -68,18 +82,18 @@ func summaryColumns(s pgpage.PageSummary, cached bool) string {
 		return moreStyle.Render("…")
 	}
 
-	items, free := "—", "—"
+	pointers, free := "—", "—"
 
 	if s.Status == pgpage.StatusOK || s.Status == pgpage.StatusNew {
-		items = fmt.Sprintf("%d items", s.Header.ItemCount())
+		pointers = fmt.Sprint(s.Header.ItemCount())
 	}
 
 	if percent, ok := s.FreeSpacePercent(); ok {
-		free = fmt.Sprintf("%.0f%% free", percent)
+		free = fmt.Sprintf("%.0f%%", percent)
 	}
 
-	return fmt.Sprintf("%s %s  %s",
-		padLeft(items, 10), padLeft(free, 9), statusStyle(s.Status).Render(s.Status.String()))
+	return fmt.Sprintf("%s  %s  %s",
+		padLeft(pointers, lpColumn), padLeft(free, freeColumn), statusStyle(s.Status).Render(s.Status.String()))
 }
 
 // padLeft right aligns s in a field of width cells. It counts cells, not

@@ -17,7 +17,7 @@ func TestValidateFixture(t *testing.T) {
 		t.Fatalf("exit code %d, want %d (stderr: %s)", code, exitOK, stderr)
 	}
 
-	if want := "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums\n"; stdout != want {
+	if want := "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 bad line pointers or tuples, 0 bad checksums\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
@@ -29,7 +29,7 @@ func TestValidateEmptyFile(t *testing.T) {
 		t.Errorf("exit code %d, want %d", code, exitOK)
 	}
 
-	if want := "scanned 0 pages: 0 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums\n"; stdout != want {
+	if want := "scanned 0 pages: 0 OK, 0 NEW, 0 INVALID, 0 bad line pointers or tuples, 0 bad checksums\n"; stdout != want {
 		t.Errorf("stdout = %q, want %q", stdout, want)
 	}
 }
@@ -66,7 +66,7 @@ block 3: pgpage: line pointer 1 offset 8153 is not aligned to 8: invalid line po
 block 4: checksum mismatch: stored 6769, computed %d
 block 4: pgpage: line pointer 1: pgpage: t_hoff 16 is not an aligned offset between 23 and the tuple length 35: invalid heap tuple header
 block 5: partial page of 100 bytes
-scanned 5 pages: 3 OK, 1 NEW, 1 INVALID, 2 invalid items, 2 bad checksums
+scanned 5 pages: 3 OK, 1 NEW, 1 INVALID, 2 bad line pointers or tuples, 2 bad checksums
 `, pgpage.PageChecksum(badItem, 3), pgpage.PageChecksum(badTuple, 4))
 
 	code, stdout, stderr := runCommand("validate", writePage(t, relation))

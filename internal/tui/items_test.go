@@ -193,7 +193,7 @@ func TestItemHighlight(t *testing.T) {
 		selected int
 		want     highlight
 	}{
-		{name: "normal", selected: 1, want: highlight{start: 8152, end: 8189, label: "item #2"}},
+		{name: "normal", selected: 1, want: highlight{start: 8152, end: 8189, label: "tuple (2,2)"}},
 		{name: "dead", selected: 0},
 		{name: "redirect", selected: 9},
 	}

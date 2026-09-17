@@ -10,7 +10,7 @@ func TestInspect(t *testing.T) {
 	const want = `Block:          2
 LSN:            0/21A8AF0
 Checksum:       7780 (OK)
-Items:          180
+Line pointers:  180
 Free space:     1728
 Layout version: 4
 Status:         OK

@@ -108,12 +108,12 @@ var keys = keyMap{
 // what they move, and so how the help describes them. Keys that do nothing
 // in this view are disabled, which also hides them from the help.
 var itemKeys = keyMap{
-	Up:       describe(keys.Up, "previous item"),
-	Down:     describe(keys.Down, "next item"),
+	Up:       describe(keys.Up, "previous line pointer"),
+	Down:     describe(keys.Down, "next line pointer"),
 	PageUp:   keys.PageUp,
 	PageDown: keys.PageDown,
-	Home:     describe(keys.Home, "first item"),
-	End:      describe(keys.End, "last item"),
+	Home:     describe(keys.Home, "first line pointer"),
+	End:      describe(keys.End, "last line pointer"),
 	GoTo:     describe(keys.GoTo, "go to line pointer"),
 	Open:     describe(keys.Open, "tuple"),
 	Hex:      describe(keys.Hex, "hex at line pointer"),

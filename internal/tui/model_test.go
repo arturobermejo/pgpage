@@ -250,7 +250,7 @@ func press(t *testing.T, m Model, keys ...string) Model {
 }
 
 // The keys of the navigator move the selection and scroll the list. With a
-// height of 17 the window holds 10 rows.
+// height of 18 the window holds 10 rows.
 func TestModelNavigation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -273,7 +273,7 @@ func TestModelNavigation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := New(openRelation(t, 20))
-			m.width, m.height = 80, 17
+			m.width, m.height = 80, 18
 
 			m = press(t, m, tt.keys...)
 
@@ -333,11 +333,11 @@ func TestModelNavigationEmptyRelation(t *testing.T) {
 // selection on screen.
 func TestModelResizeScrolls(t *testing.T) {
 	m := New(openRelation(t, 20))
-	m.width, m.height = 80, 17
+	m.width, m.height = 80, 18
 
 	m = press(t, m, "end") // block 19, window 10..19
 
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10}) // 3 rows
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 11}) // 3 rows
 	m, _ = next.(Model)
 
 	if m.visibleRows() != 3 {
@@ -355,7 +355,7 @@ func TestModelSummariesMsg(t *testing.T) {
 	m := New(openFixture(t))
 	m.width, m.height = 80, 17
 
-	if strings.Contains(m.View(), "items") {
+	if strings.Contains(m.View(), "21%") {
 		t.Fatalf("the list shows summaries before reading any page:\n%s", m.View())
 	}
 
@@ -372,8 +372,8 @@ func TestModelSummariesMsg(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{"185 items", "21% free", "OK", "180 items"} {
-		if !strings.Contains(view, want) {
+	for _, want := range []string{"0 185 21% OK", "2 180 21% OK"} {
+		if !strings.Contains(flatText(view), want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
 	}
@@ -495,7 +495,7 @@ func TestModelBodyMap(t *testing.T) {
 		gone  []string
 	}{
 		{name: "three panels", width: 140, want: []string{"PAGES", "PAGE 0 — 8192 BYTES", "PAGE HEADER"}},
-		{name: "no room for the map", width: 95, want: []string{"PAGES", "PAGE HEADER"}, gone: []string{"BYTES"}},
+		{name: "no room for the map", width: 89, want: []string{"PAGES", "PAGE HEADER"}, gone: []string{"BYTES"}},
 		{name: "only the navigator", width: 40, want: []string{"PAGES"}, gone: []string{"BYTES", "PAGE HEADER"}},
 	}
 
@@ -873,7 +873,7 @@ func TestModelScreenMargin(t *testing.T) {
 // its panel: the rows are counted after every other line on screen.
 func TestModelPageListMoreLineFits(t *testing.T) {
 	m := New(openRelation(t, 20))
-	m.width, m.height = 80, 17
+	m.width, m.height = 80, 18
 
 	if view := m.View(); !strings.Contains(view, "↓ 10 more") {
 		t.Errorf("the count of hidden pages is cut off:\n%s", view)
@@ -925,7 +925,7 @@ func TestModelOpenItems(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{"LINE POINTERS · 185", "LINE POINTER #1", "PAGE 0 — 8192 BYTES", "ITEMID WORD", "previous item"} {
+	for _, want := range []string{"LINE POINTERS · 185", "LINE POINTER #1", "PAGE 0 — 8192 BYTES", "ITEMID WORD", "previous line pointer"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -1013,7 +1013,7 @@ func TestModelStaleItemsMsg(t *testing.T) {
 func TestModelItemsHelp(t *testing.T) {
 	view := press(t, openItemsView(t, 0, 150, 30), "?").View()
 
-	for _, want := range []string{"previous item", "last item", "page view"} {
+	for _, want := range []string{"previous line pointer", "last line pointer", "page view"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("help does not contain %q:\n%s", want, view)
 		}
@@ -1109,7 +1109,7 @@ func TestModelOpenTuple(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{"TUPLE #2", "DECODED FLAGS", "t_xmin", "HEAP_XMIN_COMMITTED", "next tuple", "Esc line pointers"} {
+	for _, want := range []string{"TUPLE (2,2)", "DECODED FLAGS", "t_xmin", "HEAP_XMIN_COMMITTED", "next tuple", "Esc line pointers"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -1172,7 +1172,7 @@ func TestModelTupleViewFits(t *testing.T) {
 			}
 		}
 
-		if !strings.Contains(view, "TUPLE #168") {
+		if !strings.Contains(view, "TUPLE (2,168)") {
 			t.Errorf("%dx%d: the tuple panel is missing:\n%s", size[0], size[1], view)
 		}
 	}
@@ -1227,8 +1227,8 @@ func TestModelHexFromItemsAndTuple(t *testing.T) {
 
 	fromTuple := press(t, items, "enter", "x")
 
-	if view := fromTuple.View(); !strings.Contains(view, "← tuple #168") || !strings.Contains(view, "0x0B38") {
-		t.Errorf("the tuple #168 is not on screen:\n%s", view)
+	if view := fromTuple.View(); !strings.Contains(view, "← tuple (2,168)") || !strings.Contains(view, "0x0B38") {
+		t.Errorf("the tuple (2,168) is not on screen:\n%s", view)
 	}
 
 	if back := press(t, fromTuple, "esc"); back.current() != viewTuple {

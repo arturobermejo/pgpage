@@ -85,8 +85,8 @@ func TestTuplePanel(t *testing.T) {
 		t.Errorf("panel describes an update or nulls the tuple does not have:\n%s", panel)
 	}
 
-	if tupleTitle(it) != "TUPLE #2" {
-		t.Errorf("title = %q, want TUPLE #2", tupleTitle(it))
+	if tupleTitle(it) != "TUPLE (2,2)" {
+		t.Errorf("title = %q, want TUPLE (2,2)", tupleTitle(it))
 	}
 }
 

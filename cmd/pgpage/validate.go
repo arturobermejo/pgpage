@@ -66,9 +66,9 @@ func (r validationReport) problems() int {
 }
 
 // String formats the summary line, for example
-// "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 invalid items, 0 bad checksums".
+// "scanned 3 pages: 3 OK, 0 NEW, 0 INVALID, 0 bad line pointers or tuples, 0 bad checksums".
 func (r validationReport) String() string {
-	return fmt.Sprintf("scanned %d pages: %d OK, %d NEW, %d INVALID, %d invalid items, %d bad checksums",
+	return fmt.Sprintf("scanned %d pages: %d OK, %d NEW, %d INVALID, %d bad line pointers or tuples, %d bad checksums",
 		r.pages, r.statuses[pgpage.StatusOK], r.statuses[pgpage.StatusNew], r.statuses[pgpage.StatusInvalid],
 		r.items, r.checksums)
 }

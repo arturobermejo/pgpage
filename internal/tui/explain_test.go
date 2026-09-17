@@ -155,7 +155,7 @@ func TestExplainList(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"items 180", "free space 1728 B", "flags decoded HAS_FREE_LINES", "status OK"} {
+	for _, want := range []string{"line pointers 180", "free space 1728 B", "flags decoded HAS_FREE_LINES", "status OK"} {
 		if !strings.Contains(flatText(list), want) {
 			t.Errorf("the list does not show %q:\n%s", want, list)
 		}

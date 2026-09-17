@@ -154,7 +154,7 @@ func TestHexHighlights(t *testing.T) {
 		t.Errorf("entry highlight = %+v", got)
 	}
 
-	if got := tupleHighlight(it); got != (highlight{start: 8152, end: 8189, label: "tuple #2"}) {
+	if got := tupleHighlight(it); got != (highlight{start: 8152, end: 8189, label: "tuple (2,2)"}) {
 		t.Errorf("tuple highlight = %+v", got)
 	}
 }

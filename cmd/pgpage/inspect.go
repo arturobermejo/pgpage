@@ -31,7 +31,7 @@ func printInspect(w io.Writer, block pgpage.BlockNumber, s pgpage.PageSummary) {
 	if s.Status == pgpage.StatusOK {
 		fmt.Fprintf(tw, "LSN:\t%v\n", s.Header.LSN)
 		fmt.Fprintf(tw, "Checksum:\t%s\n", checksumText(s))
-		fmt.Fprintf(tw, "Items:\t%d\n", s.Header.ItemCount())
+		fmt.Fprintf(tw, "Line pointers:\t%d\n", s.Header.ItemCount())
 		fmt.Fprintf(tw, "Free space:\t%d\n", s.Header.FreeSpace())
 		fmt.Fprintf(tw, "Layout version:\t%d\n", s.Header.LayoutVersion)
 	}

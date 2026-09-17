@@ -106,7 +106,7 @@ func derivedRows(summary pgpage.PageSummary) []headerRow {
 	}
 
 	rows := []headerRow{
-		{"items", fmt.Sprint(h.ItemCount()), valueStyle},
+		{"line pointers", fmt.Sprint(h.ItemCount()), valueStyle},
 		{"free space", fmt.Sprintf("%d B", h.FreeSpace()), valueStyle},
 		{"free", free, valueStyle},
 	}

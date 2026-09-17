@@ -238,10 +238,8 @@ func entryHighlight(it items) highlight {
 	return highlight{start: start, end: start + 4, label: fmt.Sprintf("line pointer #%d", number(it.selected))}
 }
 
-// tupleHighlight selects the bytes of the selected tuple.
+// tupleHighlight selects the bytes of the selected tuple, the same bytes and
+// name the page map highlights.
 func tupleHighlight(it items) highlight {
-	hl := itemHighlight(it)
-	hl.label = fmt.Sprintf("tuple #%d", number(it.selected))
-
-	return hl
+	return itemHighlight(it)
 }

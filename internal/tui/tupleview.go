@@ -31,9 +31,9 @@ func selectedTuple(it items) (pgpage.HeapTuple, error) {
 	return pgpage.HeapTupleAt(it.page, it.header, number(it.selected))
 }
 
-// tupleTitle names the tuple panel.
+// tupleTitle names the tuple panel by the tuple's TID.
 func tupleTitle(it items) string {
-	return fmt.Sprintf("TUPLE #%d", number(it.selected))
+	return "TUPLE " + tid(it).String()
 }
 
 // tuplePanel renders the header of the selected tuple, grouped by what each
@@ -64,7 +64,7 @@ func tuplePanel(it items) string {
 	}
 
 	h := t.Header
-	self := pgpage.ItemPointer{Block: it.block, Offset: number(it.selected)}
+	self := tid(it)
 
 	// t_field3 is t_cid, except on tuples that a pre-9.0 VACUUM FULL moved,
 	// where it holds the transaction that moved them.

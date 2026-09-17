@@ -108,12 +108,12 @@ func TestSummaryColumns(t *testing.T) {
 		want    []string
 	}{
 		{name: "not read yet", want: []string{"…"}},
-		{name: "valid page", summary: okPage, cached: true, want: []string{"185 items", "21% free", "OK"}},
+		{name: "valid page", summary: okPage, cached: true, want: []string{"185", "21%", "OK"}},
 		{
 			name:    "new page",
 			summary: pgpage.SummarizePage(make([]byte, pgpage.PageSize), 0),
 			cached:  true,
-			want:    []string{"0 items", "—", "NEW"},
+			want:    []string{"0", "—", "NEW"},
 		},
 		{
 			name:    "invalid page",

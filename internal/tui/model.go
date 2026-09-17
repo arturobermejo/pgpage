@@ -71,8 +71,9 @@ type Model struct {
 
 // Lines the screen spends on everything but the rows of the navigator: the
 // top bar and the rule below it, the top and bottom borders of the panels,
-// the "N more" line, and the rule and the help line at the bottom.
-const listChrome = 7
+// the column titles and the "N more" line, and the rule and the help line at
+// the bottom.
+const listChrome = 8
 
 // Rows of the navigator when the terminal size is unknown, and the fewest it
 // may shrink to.
@@ -665,9 +666,9 @@ func (m Model) itemRows() int {
 }
 
 // itemListChrome is the lines of the line pointer list that are not rows,
-// besides the "N more" line listChrome already counts: the column titles,
-// and the blank line and the counts below the rows.
-const itemListChrome = 3
+// besides the column titles and the "N more" line listChrome already counts:
+// the blank line and the counts below the rows.
+const itemListChrome = 2
 
 // updatePrompt handles a key while the "go to block" prompt is open: Enter
 // jumps if what was typed is a block of this relation, Esc gives up, and
