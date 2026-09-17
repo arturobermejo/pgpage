@@ -24,16 +24,15 @@ builds:
       - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+# The binaries are attached as they are, not inside an archive, named as
+# the v0.1.0 release named them: pgpage_v0.1.0_darwin_arm64.
 archives:
   - formats:
-      - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files:
-      - LICENSE
-      - README.md
+      - binary
+    name_template: "{{ .ProjectName }}_v{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
-  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  name_template: "{{ .ProjectName }}_v{{ .Version }}_checksums.txt"
 
 changelog:
   use: git
