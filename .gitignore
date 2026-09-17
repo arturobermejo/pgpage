@@ -32,3 +32,6 @@ vendor/
 
 # Scratch files of this project
 tmp/
+
+# GoReleaser output
+dist/

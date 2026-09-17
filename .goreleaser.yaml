@@ -1,0 +1,51 @@
+# GoReleaser builds the release when a v* tag is pushed; see
+# .github/workflows/release.yml. Run "goreleaser check" after editing.
+version: 2
+
+project_name: pgpage
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/pgpage
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+      - "^ci:"
+
+release:
+  # A tag such as v0.2.0-rc1 is published as a pre-release; a plain v0.2.0
+  # is a full release.
+  prerelease: auto
