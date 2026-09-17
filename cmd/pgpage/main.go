@@ -5,7 +5,7 @@
 //	pgpage <relation-file> [--block N]
 //	pgpage tui <relation-file> [--block N]
 //	pgpage inspect <relation-file> [--block N]
-//	pgpage items <relation-file> [--block N]
+//	pgpage lp <relation-file> [--block N]
 //	pgpage validate <relation-file>
 package main
 
@@ -35,7 +35,7 @@ With a relation file and no command, pgpage opens the interactive explorer.
 commands:
   tui <relation-file> [--block N]       explore the relation interactively
   inspect <relation-file> [--block N]   print the header of one page
-  items <relation-file> [--block N]     list the line pointers and tuples of one page
+  lp <relation-file> [--block N]        list the line pointers of one page and their tuples
   validate <relation-file>              check every page of a heap relation
 `
 
@@ -57,8 +57,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runTUI(args[1:], stdin, stdout, stderr)
 	case "inspect":
 		return runInspect(args[1:], stdout, stderr)
-	case "items":
-		return runItems(args[1:], stdout, stderr)
+	case "lp", "items": // items is the name the command had first
+		return runLinePointers(args[1:], stdout, stderr)
 	case "validate":
 		return runValidate(args[1:], stdout, stderr)
 	case "help", "-h", "-help", "--help":

@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// itemsColumns is the number of columns of a "pgpage items" row.
-const itemsColumns = 12
+// lpColumns is the number of columns of a "pgpage lp" row.
+const lpColumns = 12
 
 // readItemsCSV returns the rows of the fixture's heap_page_items() output
 // for block, keyed by column name.
@@ -45,14 +45,14 @@ func readItemsCSV(t *testing.T, block int) []map[string]string {
 	return rows
 }
 
-// Every row of "pgpage items" must show what heap_page_items() reports for
+// Every row of "pgpage lp" must show what heap_page_items() reports for
 // the same line pointer of the fixture.
-func TestItemsMatchesPageinspect(t *testing.T) {
+func TestLPMatchesPageinspect(t *testing.T) {
 	states := map[string]string{"0": "UNUSED", "1": "NORMAL", "2": "REDIRECT", "3": "DEAD"}
 
 	for block := range 3 {
 		t.Run(fmt.Sprintf("block %d", block), func(t *testing.T) {
-			code, stdout, stderr := runCommand("items", fixtureHeap, "--block", strconv.Itoa(block))
+			code, stdout, stderr := runCommand("lp", fixtureHeap, "--block", strconv.Itoa(block))
 			if code != exitOK {
 				t.Fatalf("exit code %d, want %d (stderr: %s)", code, exitOK, stderr)
 			}
@@ -60,8 +60,8 @@ func TestItemsMatchesPageinspect(t *testing.T) {
 			lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n")
 			rows := readItemsCSV(t, block)
 
-			if got := strings.Fields(lines[0]); len(got) != itemsColumns || got[0] != "LP" {
-				t.Fatalf("header = %q, want %d columns starting with LP", lines[0], itemsColumns)
+			if got := strings.Fields(lines[0]); len(got) != lpColumns || got[0] != "LP" {
+				t.Fatalf("header = %q, want %d columns starting with LP", lines[0], lpColumns)
 			}
 
 			if len(lines)-1 != len(rows) {
@@ -70,8 +70,8 @@ func TestItemsMatchesPageinspect(t *testing.T) {
 
 			for i, row := range rows {
 				fields := strings.Fields(lines[i+1])
-				if len(fields) != itemsColumns {
-					t.Fatalf("row %q has %d columns, want %d", lines[i+1], len(fields), itemsColumns)
+				if len(fields) != lpColumns {
+					t.Fatalf("row %q has %d columns, want %d", lines[i+1], len(fields), lpColumns)
 				}
 
 				want := []string{row["lp"], states[row["lp_flags"]], row["lp_off"], row["lp_len"]}
@@ -85,8 +85,8 @@ func TestItemsMatchesPageinspect(t *testing.T) {
 						hex4(t, row["t_infomask"]), hex4(t, row["t_infomask2"]), row["t_hoff"])
 				}
 
-				if got := fields[:itemsColumns-1]; strings.Join(got, " ") != strings.Join(want, " ") {
-					t.Errorf("item %s:\n got %q\nwant %q", row["lp"], got, want)
+				if got := fields[:lpColumns-1]; strings.Join(got, " ") != strings.Join(want, " ") {
+					t.Errorf("line pointer %s:\n got %q\nwant %q", row["lp"], got, want)
 				}
 			}
 		})
@@ -106,8 +106,8 @@ func hex4(t *testing.T, decimal string) string {
 }
 
 // The DETAIL column explains what the other columns cannot.
-func TestItemsDetail(t *testing.T) {
-	code, stdout, _ := runCommand("items", fixtureHeap, "--block", "2")
+func TestLPDetail(t *testing.T) {
+	code, stdout, _ := runCommand("lp", fixtureHeap, "--block", "2")
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d", code, exitOK)
 	}
@@ -132,7 +132,7 @@ func TestItemsDetail(t *testing.T) {
 }
 
 // A corrupt line pointer is listed with its error instead of stopping.
-func TestItemsCorruptLinePointer(t *testing.T) {
+func TestLPCorruptLinePointer(t *testing.T) {
 	fixture, err := os.ReadFile(fixtureHeap)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +141,7 @@ func TestItemsCorruptLinePointer(t *testing.T) {
 	page := bytes.Clone(fixture[:8192])
 	page[24] |= 1 // line pointer 1: lp_off 8152 → 8153
 
-	code, stdout, _ := runCommand("items", writePage(t, page))
+	code, stdout, _ := runCommand("lp", writePage(t, page))
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d", code, exitOK)
 	}
@@ -160,7 +160,7 @@ func TestItemsCorruptLinePointer(t *testing.T) {
 
 // Pages without a valid header have no line pointers: the command shows
 // their status as inspect does.
-func TestItemsNotOK(t *testing.T) {
+func TestLPNotOK(t *testing.T) {
 	tests := []struct {
 		name string
 		page []byte
@@ -176,7 +176,7 @@ func TestItemsNotOK(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, stdout, _ := runCommand("items", writePage(t, tt.page))
+			code, stdout, _ := runCommand("lp", writePage(t, tt.page))
 
 			if code != exitOK {
 				t.Errorf("exit code %d, want %d", code, exitOK)
@@ -189,17 +189,17 @@ func TestItemsNotOK(t *testing.T) {
 	}
 }
 
-func TestItemsErrors(t *testing.T) {
+func TestLPErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		args   []string
 		code   int
 		stderr string
 	}{
-		{name: "missing file", args: []string{"items"}, code: exitUsage, stderr: "missing relation file"},
-		{name: "block not a number", args: []string{"items", fixtureHeap, "--block", "x"}, code: exitUsage, stderr: `invalid value "x" for flag -block`},
-		{name: "block past the end", args: []string{"items", fixtureHeap, "--block", "3"}, code: exitError, stderr: "block 3 is out of range"},
-		{name: "help", args: []string{"items", "-h"}, code: exitOK, stderr: "usage: pgpage items"},
+		{name: "missing file", args: []string{"lp"}, code: exitUsage, stderr: "missing relation file"},
+		{name: "block not a number", args: []string{"lp", fixtureHeap, "--block", "x"}, code: exitUsage, stderr: `invalid value "x" for flag -block`},
+		{name: "block past the end", args: []string{"lp", fixtureHeap, "--block", "3"}, code: exitError, stderr: "block 3 is out of range"},
+		{name: "help", args: []string{"lp", "-h"}, code: exitOK, stderr: "usage: pgpage lp"},
 	}
 
 	for _, tt := range tests {
@@ -223,7 +223,7 @@ func TestItemsErrors(t *testing.T) {
 
 // Live tuples in the fixture all have t_xmax and t_field3 set to 0, so a test
 // on the fixture alone could not tell those columns apart.
-func TestItemsColumnOrder(t *testing.T) {
+func TestLPColumnOrder(t *testing.T) {
 	fixture, err := os.ReadFile(fixtureHeap)
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestItemsColumnOrder(t *testing.T) {
 	page[8152+5] = 0x03
 	page[8152+8] = 3 // t_field3 = 3
 
-	code, stdout, _ := runCommand("items", writePage(t, page))
+	code, stdout, _ := runCommand("lp", writePage(t, page))
 	if code != exitOK {
 		t.Fatalf("exit code %d, want %d", code, exitOK)
 	}
@@ -243,5 +243,14 @@ func TestItemsColumnOrder(t *testing.T) {
 	const want = "1 NORMAL 8152 35 775 900 3 (0,1) 0x0902 0x0002 24 HASVARWIDTH,XMIN_COMMITTED,XMAX_INVALID"
 	if got := strings.Join(strings.Fields(strings.Split(stdout, "\n")[1]), " "); got != want {
 		t.Errorf("row 1:\n got %q\nwant %q", got, want)
+	}
+}
+
+// items, the name the command had first, still runs it.
+func TestLPItemsAlias(t *testing.T) {
+	_, want, _ := runCommand("lp", fixtureHeap, "--block", "2")
+
+	if code, got, stderr := runCommand("items", fixtureHeap, "--block", "2"); code != exitOK || got != want {
+		t.Errorf("items: exit code %d, stderr %q, output differs from lp:\n%s", code, stderr, got)
 	}
 }

@@ -10,9 +10,9 @@ import (
 	"github.com/arturobermejo/pgpage"
 )
 
-// runItems implements "pgpage items".
-func runItems(args []string, stdout, stderr io.Writer) int {
-	fs := newFlagSet("items", "usage: pgpage items <relation-file> [--block N]", stderr)
+// runLinePointers implements "pgpage lp".
+func runLinePointers(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("lp", "usage: pgpage lp <relation-file> [--block N]", stderr)
 
 	block, page, code := readBlockArg(fs, args, stderr)
 	if page == nil {
@@ -26,14 +26,14 @@ func runItems(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 
-	printItems(stdout, page, summary.Header)
+	printLinePointers(stdout, page, summary.Header)
 
 	return exitOK
 }
 
-// printItems writes one row per line pointer of page, with the header of the
+// printLinePointers writes one row per line pointer of page, with the header of the
 // tuple it references, in the columns of pageinspect's heap_page_items().
-func printItems(w io.Writer, page []byte, h pgpage.PageHeader) {
+func printLinePointers(w io.Writer, page []byte, h pgpage.PageHeader) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 	fmt.Fprintln(tw, "LP\tSTATE\tOFF\tLEN\tXMIN\tXMAX\tFIELD3\tCTID\tINFOMASK\tINFOMASK2\tHOFF\tDETAIL")
