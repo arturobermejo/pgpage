@@ -1042,6 +1042,24 @@ func TestModelItemsViewFits(t *testing.T) {
 	}
 }
 
+// The state counts wrap to the width of the list, so on a page with every
+// state they take two lines, and the list gives up a row for the second one
+// instead of having the panel cut it off.
+func TestModelItemsCountsFit(t *testing.T) {
+	m := openItemsView(t, 2, 150, 30) // block 2 has NORMAL, REDIRECT, DEAD and UNUSED
+	view := m.View()
+
+	for _, part := range stateParts(m.items.ids) {
+		if !strings.Contains(view, part) {
+			t.Errorf("view does not show the count %q:\n%s", part, view)
+		}
+	}
+
+	if got, want := m.itemRows(), m.visibleRows()-1-len(itemCountLines(m.items)); got != want || len(itemCountLines(m.items)) != 2 {
+		t.Errorf("itemRows = %d, want %d for %d count lines", got, want, len(itemCountLines(m.items)))
+	}
+}
+
 // In the line pointer view, g asks for a line pointer and selects it.
 func TestModelGoToItem(t *testing.T) {
 	m := press(t, openItemsView(t, 2, 150, 30), "g")

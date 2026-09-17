@@ -660,15 +660,17 @@ func (m Model) selectItem(index int) Model {
 }
 
 // itemRows returns how many line pointers the list can show at once: the
-// rows of the page navigator less its column titles and the state counts.
+// rows of the page navigator less what the line pointer list adds below the
+// rows, besides the column titles and the "N more" line listChrome already
+// counts: a blank line and the state counts, which take a line or more.
 func (m Model) itemRows() int {
-	return max(m.visibleRows()-itemListChrome, minListRows)
-}
+	counts := 1
+	if m.items.loaded && len(m.items.ids) > 0 {
+		counts = len(itemCountLines(m.items))
+	}
 
-// itemListChrome is the lines of the line pointer list that are not rows,
-// besides the column titles and the "N more" line listChrome already counts:
-// the blank line and the counts below the rows.
-const itemListChrome = 2
+	return max(m.visibleRows()-1-counts, minListRows)
+}
 
 // updatePrompt handles a key while the "go to block" prompt is open: Enter
 // jumps if what was typed is a block of this relation, Esc gives up, and

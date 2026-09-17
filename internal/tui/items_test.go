@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,9 +70,60 @@ func TestItemList(t *testing.T) {
 		}
 	}
 
-	for _, want := range []string{"# STATE OFFSET LEN", "↓ 168 more", stateCounts(it.ids)} {
+	for _, want := range append([]string{"# STATE OFFSET LEN", "↓ 168 more"}, stateParts(it.ids)...) {
 		if !strings.Contains(strings.Join(strings.Fields(list), " "), want) {
 			t.Errorf("list does not contain %q:\n%s", want, list)
+		}
+	}
+}
+
+// The counts wrap to the columns, so the list is never wider than its rows:
+// a panel as wide as the counts on one line would squeeze the page map.
+func TestItemListCountsWrap(t *testing.T) {
+	it := fixtureItems(t, 2)
+
+	// Every state at once makes the longest counts a page can have.
+	it.ids = append(it.ids[:0:0], it.ids...)
+	it.ids[0] = pgpage.ItemID(uint32(pgpage.ItemUnused) << 15)
+
+	lines := strings.Split(itemList(it, 12), "\n")
+	columns := lipgloss.Width(lines[0])
+
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w > columns {
+			t.Errorf("line %d is %d wide, wider than the %d of the columns: %q", i, w, columns, line)
+		}
+	}
+
+	// Wrapped, the counts still end the list, whole and in order.
+	tail := strings.Join(strings.Fields(strings.Join(lines[len(lines)-2:], " ")), " ")
+	for _, part := range stateParts(it.ids) {
+		if !strings.Contains(tail, part) {
+			t.Errorf("last two lines %q do not contain %q", tail, part)
+		}
+	}
+
+	if !strings.HasPrefix(tail, "143 NORMAL") || !strings.HasSuffix(tail, "3 UNUSED") {
+		t.Errorf("last two lines = %q, want them to run from NORMAL to UNUSED", tail)
+	}
+}
+
+func TestWrapParts(t *testing.T) {
+	parts := []string{"85 NORMAL", "42 REDIRECT", "23 DEAD", "2 UNUSED"}
+
+	tests := []struct {
+		width int
+		want  []string
+	}{
+		{100, []string{"85 NORMAL · 42 REDIRECT · 23 DEAD · 2 UNUSED"}},
+		{27, []string{"85 NORMAL · 42 REDIRECT", "23 DEAD · 2 UNUSED"}},
+		{12, []string{"85 NORMAL", "42 REDIRECT", "23 DEAD", "2 UNUSED"}},
+		{1, []string{"85 NORMAL", "42 REDIRECT", "23 DEAD", "2 UNUSED"}}, // never cut
+	}
+
+	for _, tt := range tests {
+		if got := wrapParts(parts, " · ", tt.width); !slices.Equal(got, tt.want) {
+			t.Errorf("wrapParts(width %d) = %q, want %q", tt.width, got, tt.want)
 		}
 	}
 }

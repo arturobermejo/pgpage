@@ -72,7 +72,13 @@ func number(index int) pgpage.OffsetNumber {
 //	> #2 DEAD           —    —
 //	 #10 REDIRECT     →168   —
 //
-//	183 NORMAL · 1 DEAD · 1 REDIRECT
+//	183 NORMAL · 1 REDIRECT
+//	1 DEAD · 2 UNUSED
+//
+// The counts wrap to the width of the columns. The list is as wide as its
+// widest line, and the counts of a page with all four states are wider than
+// any row: left on one line they would widen the panel by half and squeeze
+// the page map beside it down to its next size.
 func itemList(it items, rows int) string {
 	if !it.loaded {
 		return moreStyle.Render("reading…")
@@ -90,7 +96,8 @@ func itemList(it items, rows int) string {
 
 	var b strings.Builder
 
-	b.WriteString(fieldStyle.Render(fmt.Sprintf("  %-*s %-8s %6s %4s", digits+1, "#", "STATE", "OFFSET", "LEN")))
+	columns := itemColumns(digits)
+	b.WriteString(fieldStyle.Render(columns))
 
 	last := min(it.top+max(rows, 1), len(it.ids))
 
@@ -109,9 +116,50 @@ func itemList(it items, rows int) string {
 		b.WriteString("\n" + moreStyle.Render(fmt.Sprintf("  ↓ %d more", hidden)))
 	}
 
-	b.WriteString("\n\n" + moreStyle.Render(stateCounts(it.ids)))
+	b.WriteString("\n")
+
+	for _, line := range itemCountLines(it) {
+		b.WriteString("\n" + moreStyle.Render(line))
+	}
 
 	return b.String()
+}
+
+// itemColumns returns the column titles of the list, for line pointer
+// numbers of digits digits. Its width is the width of the rows.
+func itemColumns(digits int) string {
+	return fmt.Sprintf("  %-*s %-8s %6s %4s", digits+1, "#", "STATE", "OFFSET", "LEN")
+}
+
+// itemCountLines returns the state counts below the rows, wrapped to the
+// width of the columns. How many lines they take depends on the page, and
+// the model needs the number to know how many rows are left for the list.
+func itemCountLines(it items) []string {
+	digits := len(fmt.Sprint(len(it.ids)))
+
+	return wrapParts(stateParts(it.ids), " · ", lipgloss.Width(itemColumns(digits)))
+}
+
+// wrapParts joins parts with sep into lines no wider than width, as many
+// parts per line as fit, so a part is never cut in two. A part wider than
+// width takes a line of its own.
+func wrapParts(parts []string, sep string, width int) []string {
+	lines := []string{""}
+
+	for _, part := range parts {
+		last := &lines[len(lines)-1]
+
+		switch {
+		case *last == "":
+			*last = part
+		case lipgloss.Width(*last)+lipgloss.Width(sep)+lipgloss.Width(part) <= width:
+			*last += sep + part
+		default:
+			lines = append(lines, part)
+		}
+	}
+
+	return lines
 }
 
 // itemRow renders one line pointer: its number, state, offset and length.
@@ -142,6 +190,11 @@ func itemRow(index int, id pgpage.ItemID, h pgpage.PageHeader, digits int) strin
 // stateCounts returns how many line pointers are in each state, in the order
 // of the states, leaving out the ones with none: "10 NORMAL · 1 DEAD".
 func stateCounts(ids []pgpage.ItemID) string {
+	return strings.Join(stateParts(ids), " · ")
+}
+
+// stateParts returns the counts of stateCounts one state per element.
+func stateParts(ids []pgpage.ItemID) []string {
 	var counts [4]int
 
 	for _, id := range ids {
@@ -156,7 +209,7 @@ func stateCounts(ids []pgpage.ItemID) string {
 		}
 	}
 
-	return strings.Join(parts, " · ")
+	return parts
 }
 
 // itemStateStyle returns the color a line pointer state is shown in. Like the
