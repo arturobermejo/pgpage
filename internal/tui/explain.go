@@ -66,14 +66,14 @@ var explanations = []explanation{
 		field:  "pd_lsn",
 		offset: 0,
 		size:   8,
-		about:  "Position in the WAL of the last change made to this page.",
+		about:  "Position in the WAL just past the record of the last change made to this page.",
 		purpose: "It enforces write-ahead logging: a page may only be written to disk after the WAL " +
 			"has been flushed up to this position, so after a crash the log always holds every " +
 			"change the page on disk may have.",
-		how: "Every change to the page is logged first, and the LSN of that WAL record is stored " +
-			"here. During recovery, a record is replayed on the page only if its LSN is newer than " +
-			"pd_lsn: older ones are already in it. An LSN is a 64-bit byte position in the WAL, " +
-			"written as its two 32-bit halves in hex.",
+		how: "Every change to the page is logged first, and the position where that WAL record " +
+			"ends, the first byte after it, is stored here: everything before it is already in the " +
+			"page. During recovery, a record is replayed on the page only if it ends past pd_lsn. " +
+			"An LSN is a 64-bit byte position in the WAL, written as its two 32-bit halves in hex.",
 		value: func(h pgpage.PageHeader) string { return h.LSN.String() },
 		steps: func(s pgpage.PageSummary) []step {
 			raw := headerBytes(s.Header)
@@ -169,8 +169,8 @@ var explanations = []explanation{
 			"offsets, towards pd_upper: each new line pointer takes 4 bytes and moves pd_lower up by 4. " +
 			"What a line pointer points to PostgreSQL calls an item; on a heap page, a tuple. Line " +
 			"pointers are not removed when their tuple dies, because indexes find a tuple by its block " +
-			"and line pointer number: VACUUM marks them unused so they can be reused, and only trims " +
-			"the unused ones at the end of the array.",
+			"and line pointer number: pruning and VACUUM mark them unused so they can be reused, and " +
+			"VACUUM only trims the unused ones at the end of the array.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Lower) },
 		steps: func(s pgpage.PageSummary) []step {
 			h := s.Header
