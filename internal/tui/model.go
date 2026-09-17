@@ -1036,7 +1036,7 @@ func (m Model) explainLayout() (lines []string, width, rows int) {
 		width = rest
 	}
 
-	lines = strings.Split(explainPanel(e, m.explain.summary.Header, width-panelFrame), "\n")
+	lines = strings.Split(explainPanel(e, m.explain.summary, width-panelFrame), "\n")
 	rows = m.bodyHeight(explainList(m.explain.summary, m.explain.field)) - 2
 
 	return lines, width, rows

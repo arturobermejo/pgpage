@@ -1342,9 +1342,9 @@ func TestModelExplain(t *testing.T) {
 		t.Errorf("the explanation is not to the right of the list:\n%s", line)
 	}
 
-	// The working is further down the explanation.
-	if down := press(t, m, "pgdown").View(); !strings.Contains(down, "740 ÷ 4  = 185") {
-		t.Errorf("the working is not below the explanation:\n%s", down)
+	// The numbers of the page come first, before the text scrolls.
+	if !strings.Contains(flatText(view), "(pd_lower - 24) ÷ 4 = (764 - 24) ÷ 4 = 185") {
+		t.Errorf("the working of this page is not in view:\n%s", view)
 	}
 
 	next := press(t, m, "tab").View()
@@ -1445,24 +1445,28 @@ func TestModelExplainFits(t *testing.T) {
 	}
 }
 
-// PgDn scrolls an explanation taller than the panel down to its end, where
-// the strip is; PgUp scrolls back, and selecting another field starts it from
-// the top.
+// PgDn scrolls an explanation taller than the panel down to its end, the
+// last line of HOW IT WORKS; PgUp scrolls back, and selecting another field
+// starts it from the top.
 func TestModelExplainScroll(t *testing.T) {
 	m := press(t, loaded(t, 130, 26), "e")
 
-	if view := m.View(); strings.Contains(view, "↑ 764") || !strings.Contains(view, "more · PgDn") {
+	if view := m.View(); !strings.Contains(view, "more · PgDn") {
 		t.Fatalf("the explanation fits at this height, the test needs a shorter terminal:\n%s", view)
 	}
 
 	end := press(t, m, "pgdown", "pgdown", "pgdown")
+	lines, _, rows := end.explainLayout()
 
-	if view := end.View(); !strings.Contains(view, "↑ 764") || !strings.Contains(view, "more · PgUp") ||
-		strings.Contains(view, "PgDn") {
-		t.Errorf("pgdown did not reach the end of the explanation:\n%s", view)
+	// At the end, the last line of HOW IT WORKS is the last one in view.
+	lastLine := strings.TrimSpace(lines[len(lines)-1])
+
+	if view := end.View(); end.explain.scroll != maxScroll(len(lines), rows) || !strings.Contains(view, lastLine) ||
+		!strings.Contains(view, "more · PgUp") || strings.Contains(view, "PgDn") {
+		t.Errorf("pgdown did not reach the end of the explanation, %q:\n%s", lastLine, view)
 	}
 
-	if top := press(t, end, "pgup", "pgup", "pgup"); top.explain.scroll != 0 || !strings.Contains(top.View(), "PURPOSE") {
+	if top := press(t, end, "pgup", "pgup", "pgup"); top.explain.scroll != 0 || !strings.Contains(top.View(), "ON THIS PAGE") {
 		t.Errorf("pgup did not go back to the top: scroll %d", top.explain.scroll)
 	}
 

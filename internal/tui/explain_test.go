@@ -98,30 +98,52 @@ func TestExplanationsReadTheirBytes(t *testing.T) {
 	}
 }
 
-// The working of pd_lower and pd_upper arrives at what heap_page_items and
-// page_header() report for block 0: 185 line pointers and 1708 bytes free.
+// fixtureSummary returns the summary of a block of the fixture.
+func fixtureSummary(t *testing.T, block pgpage.BlockNumber) pgpage.PageSummary {
+	t.Helper()
+
+	return pgpage.SummarizePage(fixturePage(t, block), block)
+}
+
+// Every explanation starts from the field's bytes on disk and what they read
+// as, and works the page's numbers through the rule: for block 0, the 185
+// line pointers and 1708 bytes free that page_header() and heap_page_items()
+// report.
 func TestExplainSteps(t *testing.T) {
-	h := fixtureHeader(t, 0)
+	s := fixtureSummary(t, 0)
 
 	tests := map[string][]string{
+		"pd_lsn": {
+			"bytes 0-7 00 00 00 00 18 8a 1a 02",
+			"xlogid = 00 00 00 00 = 0x00000000 high half",
+			"xrecoff = 18 8a 1a 02 = 0x021a8a18 low half",
+			"written as xlogid/xrecoff in hex: 0/21A8A18",
+			"xlogid × 2³² + xrecoff = 35293720 bytes into the WAL",
+		},
+		"pd_checksum": {"bytes 8-9 71 1a → 0x1a71 = 6769", "stored = 6769 = 0x1a71", "computed = 6769 = 0x1a71 matches"},
+		"pd_flags":    {"pd_flags & 0x0001 = 0x0000 & 0x0001 = 0x0000 HAS_FREE_LINES not set"},
 		"pd_lower": {
-			"PageHeaderData 24 bytes",
-			"pd_lower 764 bytes",
-			"764 - 24 = 740 bytes used by line pointers",
-			"740 ÷ 4 = 185 line pointers (ItemIdData is 4 B)",
+			"bytes 12-13 fc 02 → 0x02fc = 764, read little-endian",
+			"pd_lower - 24 = 764 - 24 = 740 bytes of line pointers",
+			"(pd_lower - 24) ÷ 4 = (764 - 24) ÷ 4 = 185 line pointers, 4 B each",
+			"from byte 24 to byte 763",
 		},
 		"pd_upper": {
-			"2472 - 764 = 1708 bytes free",
-			"1708 ÷ 8192 = 21 % of the page",
+			"pd_upper - pd_lower = 2472 - 764 = 1708 bytes of free space",
+			"free ÷ 8192 = 1708 ÷ 8192 = 21 % of the page",
+			"pd_special - pd_upper = 8192 - 2472 = 5720 bytes of tuples",
 		},
-		"pd_special":          {"8192 - 8192 = 0 bytes of special space"},
-		"pd_pagesize_version": {"8192 | 4 = 8196 as stored"},
-		"pd_flags":            {"0x0000 no flag set", "HAS_FREE_LINES not set"},
-		"pd_prune_xid":        {"0 nothing on the page is known to be prunable"},
+		"pd_special": {"8192 - pd_special = 8192 - 8192 = 0 bytes of special space"},
+		"pd_pagesize_version": {
+			"bytes 18-19 04 20 → 0x2004 = 8196",
+			"value & 0xff00 = 0x2004 & 0xff00 = 0x2000 = 8192 page size",
+			"value & 0x00ff = 0x2004 & 0x00ff = 0x04 = 4 layout version",
+		},
+		"pd_prune_xid": {"bytes 20-23 00 00 00 00 → 0x00000000 = 0", "pd_prune_xid = 0 no hint"},
 	}
 
 	for field, lines := range tests {
-		box := flatText(explainBox(explanationOf(t, field), h, 60))
+		box := flatText(explainBox(explanationOf(t, field), s, 100))
 
 		for _, want := range lines {
 			if !strings.Contains(box, want) {
@@ -131,9 +153,35 @@ func TestExplainSteps(t *testing.T) {
 	}
 
 	// Block 2 has a free line pointer, and its flags say so.
-	if box := flatText(explainBox(explanationOf(t, "pd_flags"), fixtureHeader(t, 2), 60)); !strings.Contains(box, "0x0001 HAS_FREE_LINES") ||
-		!strings.Contains(box, "HAS_FREE_LINES set") {
+	if box := flatText(explainBox(explanationOf(t, "pd_flags"), fixtureSummary(t, 2), 100)); !strings.Contains(box,
+		"pd_flags & 0x0001 = 0x0001 & 0x0001 = 0x0001 HAS_FREE_LINES set") {
 		t.Errorf("pd_flags of block 2:\n%s", box)
+	}
+}
+
+// The bytes the explanations show are the bytes on disk: encoding the header
+// again gives back the first 24 bytes of every page of the fixture.
+func TestHeaderBytes(t *testing.T) {
+	for block := range pgpage.BlockNumber(3) {
+		page := fixturePage(t, block)
+
+		if got := headerBytes(fixtureHeader(t, block)); string(got[:]) != string(page[:pgpage.PageHeaderSize]) {
+			t.Errorf("block %d: encoded % x, on disk % x", block, got, page[:pgpage.PageHeaderSize])
+		}
+	}
+}
+
+// A mismatch says so, with the checksum the page should have.
+func TestExplainChecksumMismatch(t *testing.T) {
+	page := fixturePage(t, 0)
+	page[100] ^= 0xff // a byte of the line pointers: the header still parses
+
+	s := pgpage.SummarizePage(page, 0)
+	box := flatText(explainBox(explanationOf(t, "pd_checksum"), s, 100))
+
+	want := fmt.Sprintf("computed = %d = %#04x does not match", s.ComputedChecksum, s.ComputedChecksum)
+	if s.Checksum != pgpage.ChecksumMismatch || !strings.Contains(box, want) {
+		t.Errorf("status %v, want %q in:\n%s", s.Checksum, want, box)
 	}
 }
 
@@ -173,24 +221,59 @@ func TestExplainList(t *testing.T) {
 	}
 }
 
-// The equals signs of the sums line up, and so do the meanings after them.
+// The steps are columns: the equals signs after the rules line up, so do the
+// ones after the numbers, and the meanings; a step without numbers leaves
+// their column empty, and a remark takes the line alone.
 func TestRenderStepsAlign(t *testing.T) {
 	lines := renderSteps([]step{
-		{"764 - 24 = 740", "bytes used by line pointers"},
-		{"740 ÷ 4 = 185", "line pointers"},
-		{"", "a remark"},
-	}, 60)
+		{"pd_lower - 24", "764 - 24", "740", "bytes of line pointers"},
+		{"(pd_lower - 24) ÷ 4", "(764 - 24) ÷ 4", "185", "line pointers"},
+		{"pd_prune_xid", "", "0", "no hint"},
+		{"", "", "", "a remark"},
+	}, 80)
 
-	if column(lines[0], "=") != column(lines[1], "=") {
-		t.Errorf("the equals signs do not line up:\n%s\n%s", lines[0], lines[1])
+	for _, i := range []int{1, 2} {
+		if column(lines[0], "=") != column(lines[i], "=") {
+			t.Errorf("the first equals signs do not line up:\n%s\n%s", lines[0], lines[i])
+		}
 	}
 
-	if column(lines[0], "bytes") != column(lines[1], "line") {
-		t.Errorf("the meanings do not line up:\n%s\n%s", lines[0], lines[1])
+	if column(lines[0], "= 740") != column(lines[1], "= 185") {
+		t.Errorf("the second equals signs do not line up:\n%s\n%s", lines[0], lines[1])
 	}
 
-	if strings.TrimRight(lines[2], " ") != "a remark" {
-		t.Errorf("a remark is drawn as %q", lines[2])
+	if column(lines[0], "bytes") != column(lines[1], "line") || column(lines[0], "bytes") != column(lines[2], "no hint") {
+		t.Errorf("the meanings do not line up:\n%s", strings.Join(lines, "\n"))
+	}
+
+	if strings.TrimRight(lines[3], " ") != "a remark" {
+		t.Errorf("a remark is drawn as %q", lines[3])
+	}
+}
+
+// A meaning too long for the room right of the sum wraps under itself, not
+// under the sum.
+func TestRenderStepsWrapsMeanings(t *testing.T) {
+	lines := renderSteps([]step{
+		{"pd_lower - 24", "764 - 24", "740", "bytes used by the line pointers of this page, one after the other"},
+	}, 50)
+
+	if len(lines) < 2 {
+		t.Fatalf("the meaning did not wrap:\n%s", strings.Join(lines, "\n"))
+	}
+
+	start := column(lines[0], "bytes")
+
+	for _, line := range lines[1:] {
+		if lead := len(line) - len(strings.TrimLeft(line, " ")); lead != start {
+			t.Errorf("a wrapped line starts at %d, want %d under the meaning:\n%s", lead, start, strings.Join(lines, "\n"))
+		}
+	}
+
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got > 50 {
+			t.Errorf("a line is %d cells, want at most 50:\n%s", got, line)
+		}
 	}
 }
 
@@ -237,11 +320,11 @@ func TestPageStrip(t *testing.T) {
 
 // Every line of an explanation fits the panel it is drawn in.
 func TestExplainPanelFits(t *testing.T) {
-	h := fixtureHeader(t, 2)
+	s := fixtureSummary(t, 2)
 
 	for _, width := range []int{minExplainWidth - panelFrame, 60, 120} {
 		for _, e := range explanations {
-			for _, line := range strings.Split(explainPanel(e, h, width), "\n") {
+			for _, line := range strings.Split(explainPanel(e, s, width), "\n") {
 				if got := lipgloss.Width(line); got > width {
 					t.Errorf("%s at width %d: a line is %d cells:\n%s", e.field, width, got, line)
 				}
