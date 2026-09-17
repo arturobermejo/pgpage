@@ -167,13 +167,8 @@ func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highligh
 		b.WriteString(mapRow(regions, row, cells, hl))
 	}
 
-	b.WriteString("\n\n" + legend(regions, width))
-	b.WriteString("\n" + fieldStyle.Render(fmt.Sprintf("1 cell = %d B", bytesPerRow/cells)))
-
-	if hl.start < hl.end {
-		b.WriteString("\n" + swatch(paint{highlighted: true}, 1) + " " + valueStyle.Render(hl.label) + " " +
-			fieldStyle.Render(fmt.Sprintf("bytes %d-%d · %d B", hl.start, hl.end-1, hl.end-hl.start)))
-	}
+	b.WriteString("\n\n" + legend(regions, hl, width))
+	b.WriteString("\n\n" + fieldStyle.Render(fmt.Sprintf("1 cell = %d B", bytesPerRow/cells)))
 
 	return b.String()
 }
@@ -372,30 +367,45 @@ func columnScale(cells int) string {
 	return offsetStyle.Render(string(line))
 }
 
-// legend names every region that has bytes, with its range and its size,
-// in as many columns as width allows.
-func legend(regions []pgpage.Region, width int) string {
-	const gap = 2
+// legendRow is one line of the legend: a swatch, a name and a byte range.
+type legendRow struct {
+	swatch     string
+	name       string
+	start, end int // bytes, end excluded
+}
 
-	var (
-		entries []string
-		longest int
-	)
+// legend names every region that has bytes, and the highlight if there is
+// one, as a table: the names, the ranges and the sizes each in a column of
+// their own, the same width in every entry, so that the entries line up
+// however many columns of them fit in width.
+//
+//	█ Header        0-23      24 B    ╱ Line ptrs    24-763    740 B
+//	╎ Free        764-2471  1708 B    ╲ Tuples     2472-8191  5720 B
+//
+// The regions come in page order, row by row. The highlight gets a line of
+// its own below them: it is a part of one region, not a region.
+func legend(regions []pgpage.Region, hl highlight, width int) string {
+	const gap = 4 // between columns of entries
+
+	var rows []legendRow
 
 	for _, region := range regions {
-		if region.Len() == 0 {
-			continue
+		if region.Len() > 0 {
+			rows = append(rows, legendRow{legendSwatch(region.Kind), regionName(region.Kind), region.Start, region.End})
 		}
-
-		entry := legendEntry(region)
-		longest = max(longest, lipgloss.Width(entry))
-
-		entries = append(entries, entry)
 	}
 
-	// Columns are as wide as the longest entry, so they line up whatever the
-	// page holds: at least one, even when nothing really fits.
-	columns := max((width+gap)/(longest+gap), 1)
+	if hl.start < hl.end {
+		rows = append(rows, legendRow{swatch(paint{highlighted: true}, 1), hl.label, hl.start, hl.end})
+	}
+
+	entries := renderLegend(rows)
+	if hl.start < hl.end {
+		entries = entries[:len(entries)-1]
+	}
+
+	entryWidth := maxWidth(entries)
+	columns := max((width+gap)/(entryWidth+gap), 1)
 
 	var b strings.Builder
 
@@ -405,20 +415,41 @@ func legend(regions []pgpage.Region, width int) string {
 		case i%columns == 0:
 			b.WriteString("\n")
 		default:
-			b.WriteString(strings.Repeat(" ", gap+longest-lipgloss.Width(entries[i-1])))
+			b.WriteString(strings.Repeat(" ", gap))
 		}
 
 		b.WriteString(entry)
 	}
 
+	if hl.start < hl.end {
+		b.WriteString("\n" + renderLegend(rows)[len(rows)-1])
+	}
+
 	return b.String()
 }
 
-// legendEntry returns "█ Header 0-23 · 24 B".
-func legendEntry(region pgpage.Region) string {
-	return legendSwatch(region.Kind) + " " +
-		valueStyle.Render(regionName(region.Kind)) + " " +
-		fieldStyle.Render(fmt.Sprintf("%d-%d · %d B", region.Start, region.End-1, region.Len()))
+// renderLegend renders the rows with their columns aligned across all of
+// them: names left aligned, the range around its dash, and sizes right
+// aligned, and every entry padded to the same width.
+func renderLegend(rows []legendRow) []string {
+	var nameW, startW, endW, sizeW int
+
+	for _, r := range rows {
+		nameW = max(nameW, lipgloss.Width(r.name))
+		startW = max(startW, len(fmt.Sprint(r.start)))
+		endW = max(endW, len(fmt.Sprint(r.end-1)))
+		sizeW = max(sizeW, len(fmt.Sprint(r.end-r.start)))
+	}
+
+	out := make([]string, len(rows))
+
+	for i, r := range rows {
+		out[i] = r.swatch + " " +
+			valueStyle.Render(padRight(r.name, nameW+1)) + " " +
+			fieldStyle.Render(fmt.Sprintf("%*d-%-*d  %*d B", startW, r.start, endW, r.end-1, sizeW, r.end-r.start))
+	}
+
+	return out
 }
 
 // legendSwatch returns the one cell that shows the color of a region in the

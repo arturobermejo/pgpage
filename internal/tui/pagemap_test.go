@@ -118,12 +118,12 @@ func TestPageMapLegend(t *testing.T) {
 	m := pageMap(pgpage.SummarizePage(fixturePage(t, 0), 0), true, 70)
 
 	for _, want := range []string{
-		"Header 0-23 · 24 B",
-		"Line ptrs 24-763 · 740 B",
-		"Free 764-2471 · 1708 B",
-		"Tuples 2472-8191 · 5720 B",
+		"Header 0-23 24 B",
+		"Line ptrs 24-763 740 B",
+		"Free 764-2471 1708 B",
+		"Tuples 2472-8191 5720 B",
 	} {
-		if !strings.Contains(m, want) {
+		if !strings.Contains(flatText(m), want) {
 			t.Errorf("the map does not contain %q:\n%s", want, m)
 		}
 	}
@@ -377,7 +377,7 @@ func TestPageMapHighlight(t *testing.T) {
 		t.Errorf("%d highlighted cells, want 5:\n%s", n, rows[mapRows-1])
 	}
 
-	if !strings.Contains(m, "item #1 bytes 8152-8186 · 35 B") {
+	if !strings.Contains(flatText(m), "item #1 8152-8186 35 B") {
 		t.Errorf("the legend does not name the highlight:\n%s", m)
 	}
 
@@ -563,4 +563,57 @@ func TestPageMapSplitCellColors(t *testing.T) {
 			t.Errorf("row %d is %d cells wide, want %d", i, got, offsetLabel+32)
 		}
 	}
+}
+
+// The legend is a table: whatever the page and the width, the names, the
+// dashes of the ranges and the units of the sizes of every entry are in the
+// same columns, and the highlight, below the regions, lines up with them.
+func TestPageMapLegendIsATable(t *testing.T) {
+	hl := highlight{start: 8152, end: 8189, label: "item #2"}
+
+	for _, block := range []pgpage.BlockNumber{0, 2} {
+		summary := pgpage.SummarizePage(fixturePage(t, block), block)
+
+		for _, width := range []int{offsetLabel + 16, offsetLabel + 32, 90, 140} {
+			lines := strings.Split(legend(pgpage.PageRegions(summary.Header), hl, width), "\n")
+
+			var entries []string
+
+			// A line holds one or more entries, a fixed width apart.
+			for _, line := range lines {
+				entries = append(entries, splitEntries(line)...)
+			}
+
+			if len(entries) != 5 {
+				t.Fatalf("block %d, width %d: %d entries, want 4 regions and the highlight:\n%s",
+					block, width, len(entries), strings.Join(lines, "\n"))
+			}
+
+			for _, entry := range entries[1:] {
+				for _, mark := range []string{"-", " B"} {
+					if column(entry, mark) != column(entries[0], mark) {
+						t.Errorf("block %d, width %d: %q is not in the column of the first entry:\n%s\n%s",
+							block, width, mark, entries[0], entry)
+					}
+				}
+			}
+		}
+	}
+}
+
+// splitEntries cuts a legend line into its entries, which all end in " B".
+func splitEntries(line string) []string {
+	var entries []string
+
+	for line != "" {
+		end := strings.Index(line, " B")
+		if end < 0 {
+			break
+		}
+
+		entries = append(entries, strings.TrimLeft(line[:end+2], " "))
+		line = line[end+2:]
+	}
+
+	return entries
 }
