@@ -1331,7 +1331,7 @@ func TestModelExplain(t *testing.T) {
 
 	view := m.View()
 
-	for _, want := range []string{"PAGE HEADER", "> pd_lower", "pd_lower = 764", "PURPOSE", "HOW IT WORKS", "740 ÷ 4  = 185", "close explain"} {
+	for _, want := range []string{"PAGE HEADER", "> pd_lower", "pd_lower = 764", "PURPOSE", "HOW IT WORKS", "close explain"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view does not contain %q:\n%s", want, view)
 		}
@@ -1340,6 +1340,11 @@ func TestModelExplain(t *testing.T) {
 	// The list is on the left, and the explanation beside it.
 	if line := lineWith(t, view, "pd_lower = 764"); strings.Index(line, "PAGE HEADER") > strings.Index(line, "pd_lower") {
 		t.Errorf("the explanation is not to the right of the list:\n%s", line)
+	}
+
+	// The working is further down the explanation.
+	if down := press(t, m, "pgdown").View(); !strings.Contains(down, "740 ÷ 4  = 185") {
+		t.Errorf("the working is not below the explanation:\n%s", down)
 	}
 
 	next := press(t, m, "tab").View()

@@ -87,7 +87,8 @@ var explanations = []explanation{
 		how: "The checksum is computed when the page is written out, over the whole page and its " +
 			"block number, with this field taken as 0; on read it is computed again and compared. " +
 			"The block number makes a correct page written in the wrong place fail too. Checksums " +
-			"are chosen at initdb, on by default since PostgreSQL 18; with them off, the field is unused.",
+			"are chosen at initdb, on by default since PostgreSQL 18, and can be switched offline with " +
+			"pg_checksums; with them off, the field is unused.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Checksum) },
 		steps: func(h pgpage.PageHeader) []step {
 			return []step{
@@ -106,7 +107,7 @@ var explanations = []explanation{
 		how: "HAS_FREE_LINES says some line pointers are unused, so a new tuple can reuse one instead " +
 			"of growing the array. FULL is set when an UPDATE found no room, a hint that pruning " +
 			"may pay off. ALL_VISIBLE says every tuple is visible to every transaction, so a scan need " +
-			"not check them one by one; the visibility map keeps the same bit for VACUUM and " +
+			"not check them one by one; the visibility map keeps a matching bit for VACUUM and " +
 			"index-only scans.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprintf("%#04x", uint16(h.Flags)) },
 		facts: func(h pgpage.PageHeader) []headerRow {
@@ -127,10 +128,12 @@ var explanations = []explanation{
 		about:  "Offset to the end of the line pointer array.",
 		purpose: "With pd_upper it bounds the free space in the middle of the page, so knowing whether " +
 			"a tuple fits is a subtraction, not a search.",
-		how: "Line pointers grow from the header towards the end of the page, 4 bytes each, and a " +
-			"new tuple that needs one moves pd_lower up by 4. They are not removed when their tuple " +
-			"dies, because indexes point at them by number: VACUUM marks them unused, and only " +
-			"trims the ones left unused at the end of the array.",
+		how: "The line pointer array starts right after the 24-byte header and grows towards higher " +
+			"offsets, towards pd_upper: each new line pointer takes 4 bytes and moves pd_lower up by 4. " +
+			"What a line pointer points to PostgreSQL calls an item; on a heap page, a tuple. Line " +
+			"pointers are not removed when their tuple dies, because indexes find a tuple by its block " +
+			"and line pointer number: VACUUM marks them unused so they can be reused, and only trims " +
+			"the unused ones at the end of the array.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Lower) },
 		facts: func(h pgpage.PageHeader) []headerRow {
 			return []headerRow{
@@ -153,13 +156,14 @@ var explanations = []explanation{
 		offset: 14,
 		size:   2,
 		about:  "Offset to the beginning of tuple data.",
-		purpose: "It says where the next tuple goes. Tuples fill the page from the end backwards while " +
-			"line pointers grow forwards, so both can grow without knowing in advance how many of " +
-			"each the page will hold.",
-		how: "A new tuple is written just below pd_upper, which moves down by the tuple's size, " +
-			"rounded up to an 8-byte boundary. When pd_upper - pd_lower cannot hold the tuple and its " +
-			"line pointer, it goes to another page. Pruning and VACUUM pack the live tuples back " +
-			"towards the end, and pd_upper moves up again.",
+		purpose: "It says where the next tuple goes. Tuples are added from pd_special towards lower " +
+			"offsets while the line pointer array grows towards higher ones, so both grow into the free " +
+			"space between them without knowing in advance how many of each the page will hold.",
+		how: "A new tuple is written just below pd_upper, which moves down by the tuple's size " +
+			"rounded up to the platform's alignment, 8 bytes on 64-bit systems. When the free space " +
+			"cannot hold the tuple, plus a new line pointer if no unused one can be reused, the tuple " +
+			"goes to another page. Pruning and VACUUM pack the remaining tuples back towards " +
+			"pd_special, and pd_upper moves up again.",
 		note:  "Free space is the region between pd_lower and pd_upper.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprint(h.Upper) },
 		steps: func(h pgpage.PageHeader) []step {
@@ -219,9 +223,10 @@ var explanations = []explanation{
 		purpose: "Pruning reclaims the space of tuple versions nobody can see anymore. This field says " +
 			"whether trying is worth it, without looking at a single tuple.",
 		how: "A DELETE or UPDATE leaves the old version of the row in place and stores its transaction " +
-			"id here, unless an older one is already stored. The next time the page is read, if that " +
-			"transaction is older than every running snapshot, the page is pruned: dead versions are " +
-			"removed, HOT chains shortened, and the field updated. 0 means there is no hint.",
+			"id here, unless an older one is already stored. When a query later reads the page and it " +
+			"is running short of free space, and that transaction is older than every snapshot still " +
+			"running, the page is pruned: dead versions are removed, HOT chains shortened, and the " +
+			"field updated. 0 means there is no hint.",
 		value: func(h pgpage.PageHeader) string { return fmt.Sprint(uint32(h.PruneXID)) },
 		steps: func(h pgpage.PageHeader) []step {
 			if h.PruneXID == 0 {
