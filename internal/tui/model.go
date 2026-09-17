@@ -401,7 +401,7 @@ func (m Model) updateItems(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, itemKeys.Hex):
 		if m.items.loaded && m.items.page != nil {
-			m = m.openHex(m.items.block, m.items.page, entryHighlight(m.items))
+			m = m.openHex(m.items.block, m.items.page, itemHighlights(m.items))
 		}
 
 	case key.Matches(msg, itemKeys.GoTo):
@@ -462,7 +462,7 @@ func (m Model) updateTuple(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m = m.pop()
 
 	case key.Matches(msg, tupleKeys.Hex):
-		m = m.openHex(m.items.block, m.items.page, tupleHighlight(m.items))
+		m = m.openHex(m.items.block, m.items.page, tupleFirst(itemHighlights(m.items)))
 
 	case key.Matches(msg, tupleKeys.Up):
 		m = m.selectTuple(m.items.selected-1, -1)
@@ -551,7 +551,7 @@ func (m Model) selectField(index int) Model {
 
 // openHex opens the hex view on block with hl selected. page is nil when the
 // view that opens it has not read the page, and a hexMsg brings it later.
-func (m Model) openHex(block pgpage.BlockNumber, page []byte, hl highlight) Model {
+func (m Model) openHex(block pgpage.BlockNumber, page []byte, hl highlights) Model {
 	m.showHelp = false
 	m = m.push(viewHex)
 	m.hex = hexState{block: block, hl: hl}
@@ -578,8 +578,8 @@ func (m Model) showHex(page []byte, err error) Model {
 
 	// Scroll so the selection starts a couple of lines below the top, with
 	// the bytes before it in view as context.
-	if m.hex.hl.start < m.hex.hl.end {
-		m.hex.vp.SetYOffset(m.hex.hl.start/pgpage.HexBytesPerLine - 2)
+	if len(m.hex.hl) > 0 {
+		m.hex.vp.SetYOffset(m.hex.hl[0].start/pgpage.HexBytesPerLine - 2)
 	}
 
 	return m
@@ -916,9 +916,9 @@ func (m Model) body() string {
 }
 
 // itemsBody renders the line pointer view: the list of line pointers, the
-// page map with the selected one's tuple highlighted, and the selected line
-// pointer in detail. Like the page view, it drops the map first and keeps
-// the list, which is what the keys act on.
+// page map with the selected one's entry and tuple highlighted, and the
+// selected line pointer in detail. Like the page view, it drops the map first
+// and keeps the list, which is what the keys act on.
 func (m Model) itemsBody() string {
 	title := "LINE POINTERS"
 	if m.items.loaded {
@@ -943,7 +943,7 @@ func (m Model) itemsBody() string {
 	if mapWidth := left - detailWidth - lipgloss.Width(panelGap); mapWidth >= minMapWidth {
 		summary, cached := m.summaries[m.items.block]
 		mapTitle := fmt.Sprintf("PAGE %d — %d BYTES", m.items.block, pgpage.PageSize)
-		content := pageMapWith(summary, cached, mapWidth-panelFrame, itemHighlight(m.items))
+		content := pageMapWith(summary, cached, mapWidth-panelFrame, itemHighlights(m.items))
 
 		panels = append(panels, panel(mapTitle, content, mapWidth, height, borderStyle))
 	}

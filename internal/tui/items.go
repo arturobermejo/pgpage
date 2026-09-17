@@ -236,30 +236,49 @@ func itemPanel(it items) string {
 	return out
 }
 
-// itemHighlight returns the bytes of the selected line pointer's tuple, for
-// the page map to highlight, or nothing when it points to no storage.
+// itemHighlights returns what the selected line pointer highlights: the 4
+// bytes of its entry in the array, and the tuple it points to, if any. The
+// entry comes first, as what the user selected.
 //
-// The label names the tuple by its TID, (block,line pointer), as PostgreSQL
-// does in t_ctid: a tuple has no number of its own, the number is the line
-// pointer's.
-func itemHighlight(it items) highlight {
+// The tuple is named by its TID, (block,line pointer), as PostgreSQL does in
+// t_ctid: a tuple has no number of its own, the number is the line pointer's.
+// A redirect points to another line pointer instead, and says which.
+func itemHighlights(it items) highlights {
 	if !it.loaded || it.selected >= len(it.ids) {
-		return highlight{}
+		return nil
 	}
 
 	n, id := number(it.selected), it.ids[it.selected]
+	start := pgpage.PageHeaderSize + it.selected*4
+
+	entry := highlight{start: start, end: start + 4, label: fmt.Sprintf("line ptr #%d", n)}
+	if id.State() == pgpage.ItemRedirect {
+		entry.label += fmt.Sprintf(" → #%d", id.Offset())
+	}
 
 	// A line pointer that fails its checks may point anywhere, even past the
 	// page: its bytes are not drawn as if they were a tuple.
 	if !id.HasStorage() || id.State() == pgpage.ItemRedirect || it.header.CheckItemID(n, id) != nil {
-		return highlight{}
+		return highlights{entry}
 	}
 
-	return highlight{
-		start: int(id.Offset()),
-		end:   int(id.Offset()) + int(id.Length()),
-		label: "tuple " + tid(it).String(),
+	return highlights{entry, {
+		start:   int(id.Offset()),
+		end:     int(id.Offset()) + int(id.Length()),
+		label:   "tuple " + tid(it).String(),
+		pointed: true,
+	}}
+}
+
+// tupleFirst returns the highlights of the selected line pointer with its
+// tuple first, for the hex view opened on the tuple to scroll to it. The
+// colors do not change: they say which is the entry and which the tuple.
+func tupleFirst(hl highlights) highlights {
+	if len(hl) < 2 {
+		return hl
 	}
+
+	return highlights{hl[1], hl[0]}
 }
 
 // itemPanelWidth is the widest value the line pointer panel shows, so that

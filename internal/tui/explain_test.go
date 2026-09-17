@@ -304,7 +304,7 @@ func TestPageStrip(t *testing.T) {
 		cell := min(at, pgpage.PageSize-1) * width / pgpage.PageSize
 		strip := []rune(lines[0])
 
-		if strip[cell] != []rune(highlightGlyph)[0] {
+		if strip[cell] != []rune(markGlyph[markSelected])[0] {
 			t.Errorf("offset %d: cell %d is %q, want the highlight:\n%s", at, cell, strip[cell], lines[0])
 		}
 

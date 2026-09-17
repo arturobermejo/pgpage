@@ -44,8 +44,9 @@ var (
 
 	// Bytes of the hex view: zeroes dimmed, and the selection in the colors
 	// the page map highlights it with.
-	zeroByteStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	highlightByteStyle = lipgloss.NewStyle().Background(lipgloss.Color("177")).Foreground(lipgloss.Color("234"))
+	zeroByteStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selectedByteStyle = lipgloss.NewStyle().Background(lipgloss.Color("177")).Foreground(lipgloss.Color("234"))
+	pointedByteStyle  = lipgloss.NewStyle().Background(lipgloss.Color("133")).Foreground(lipgloss.Color("234"))
 
 	// A caveat the reader should keep in mind, such as the tuple bytes that
 	// cannot be decoded without the table's schema.
@@ -77,9 +78,14 @@ var regionPalette = map[pgpage.RegionKind]regionColors{
 	pgpage.RegionSpecial:      {background: "244", line: "240"}, // gray
 }
 
-// highlightColors paint the bytes of the selected line pointer on the map: the
-// color of the selection everywhere else, so the eye links the two.
-var highlightColors = regionColors{background: "177", line: "133"}
+// selectedColors paint what was selected on the map, such as the entry of a
+// line pointer, in the color of the selection everywhere else, so the eye
+// links the two; pointedColors paint what it points to, its tuple, in a
+// darker shade of the same color.
+var (
+	selectedColors = regionColors{background: "177", line: "133"}
+	pointedColors  = regionColors{background: "133", line: "96"}
+)
 
 // helpStyles returns the styles of the help component, which comes with a
 // palette of its own that has nothing to do with ours.

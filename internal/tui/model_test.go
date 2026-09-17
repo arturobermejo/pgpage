@@ -1221,8 +1221,15 @@ func TestModelHexFromItemsAndTuple(t *testing.T) {
 		t.Error("x from the line pointers read the page again")
 	}
 
-	if view := fromItems.View(); !strings.Contains(view, "← line pointer #168") {
+	if view := fromItems.View(); !strings.Contains(view, "← line ptr #168") {
 		t.Errorf("the entry of #168 is not on screen:\n%s", view)
+	}
+
+	// Scrolled to the entry, the dump still names both, under it.
+	for _, want := range []string{"line ptr #168 · bytes 692-695 · 4 B", "tuple (2,168) · bytes"} {
+		if !strings.Contains(fromItems.View(), want) {
+			t.Errorf("the detail does not say %q:\n%s", want, fromItems.View())
+		}
 	}
 
 	fromTuple := press(t, items, "enter", "x")
@@ -1703,5 +1710,27 @@ func TestModelMapKeepsItsScale(t *testing.T) {
 	// not one per column.
 	if changes > len(mapCellChoices) {
 		t.Errorf("the map changed its scale %d times between 110 and 170 columns, want at most %d", changes, len(mapCellChoices))
+	}
+}
+
+// In the line pointer view the map highlights the selected entry and its
+// tuple, and the legend names both below the regions.
+func TestModelItemsMapHighlightsEntryAndTuple(t *testing.T) {
+	m := press(t, openItemsView(t, 2, 150, 40), "down") // #2, NORMAL
+
+	legend := flatText(m.View())
+
+	for _, want := range []string{"▓ line ptr #2 28-31 4 B", "▒ tuple (2,2) 8152-8188 37 B"} {
+		if !strings.Contains(legend, want) {
+			t.Errorf("the legend does not name %q:\n%s", want, m.View())
+		}
+	}
+
+	if row := lineWith(t, m.View(), "0x0000 "); !strings.Contains(row, markGlyph[markSelected]) {
+		t.Errorf("the entry is not highlighted in the first row of the map:\n%s", row)
+	}
+
+	if row := lineWith(t, m.View(), "0x1E00 "); !strings.Contains(row, markGlyph[markPointed]) {
+		t.Errorf("the tuple is not highlighted in the last row of the map:\n%s", row)
 	}
 }

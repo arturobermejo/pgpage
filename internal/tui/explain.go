@@ -326,8 +326,8 @@ func (e explanation) title(h pgpage.PageHeader) string {
 }
 
 // highlight returns the bytes the field is stored in, what x shows.
-func (e explanation) highlight() highlight {
-	return highlight{start: e.offset, end: e.offset + e.size, label: e.field}
+func (e explanation) highlight() highlights {
+	return highlights{{start: e.offset, end: e.offset + e.size, label: e.field}}
 }
 
 // explainPanel renders the explanation of a field, width cells wide. The
@@ -494,7 +494,7 @@ func renderSteps(steps []step, width int) []string {
 // heap page: it marks the last cell.
 func pageStrip(h pgpage.PageHeader, width, at int) string {
 	byteAt := min(max(at, 0), pgpage.PageSize-1)
-	row := stripRow(pgpage.PageRegions(h), 0, pgpage.PageSize, width, highlight{start: byteAt, end: byteAt + 1})
+	row := stripRow(pgpage.PageRegions(h), 0, pgpage.PageSize, width, highlights{{start: byteAt, end: byteAt + 1}})
 
 	cell := byteAt * width / pgpage.PageSize
 

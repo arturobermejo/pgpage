@@ -75,15 +75,33 @@ func glyph(kind pgpage.RegionKind) string {
 	return cellGlyph
 }
 
-// highlightGlyph draws the highlighted cells when there is no color: a shade
-// no region uses.
-const highlightGlyph = "▒"
+// mark is how a highlighted byte is painted over its region.
+type mark uint8
 
-// highlight is a range of bytes the map paints over its regions, such as the
-// tuple of the selected line pointer. The zero value highlights nothing.
+const (
+	unmarked mark = iota
+	// markSelected is what the user selected, such as the entry of a line
+	// pointer: the light shade of the selection color.
+	markSelected
+	// markPointed is what the selection points to, such as the tuple of
+	// that line pointer: the dark shade of the same color, so the two read
+	// as one selection and still tell apart.
+	markPointed
+)
+
+// markGlyph draws the highlighted cells when there is no color: shades no
+// region uses, the denser one for what was selected.
+var markGlyph = map[mark]string{
+	markSelected: "▓",
+	markPointed:  "▒",
+}
+
+// highlight is a range of bytes painted over the regions of the page, in the
+// map and in the hex view. The zero value highlights nothing.
 type highlight struct {
 	start, end int    // bytes, end excluded
 	label      string // what the legend calls the range
+	pointed    bool   // what the selection points to, not the selection
 }
 
 // covers reports whether the highlight shares any byte with [start, end).
@@ -91,11 +109,36 @@ func (h highlight) covers(start, end int) bool {
 	return h.start < h.end && start < h.end && h.start < end
 }
 
+// mark returns how the bytes of the highlight are painted.
+func (h highlight) mark() mark {
+	if h.pointed {
+		return markPointed
+	}
+
+	return markSelected
+}
+
+// highlights are the ranges highlighted at once: a line pointer's entry and
+// the tuple it points to. The first one is where the hex view scrolls to.
+type highlights []highlight
+
+// markIn returns how the first highlight that shares a byte with [start,
+// end) paints it, or unmarked when none does.
+func (hs highlights) markIn(start, end int) mark {
+	for _, h := range hs {
+		if h.covers(start, end) {
+			return h.mark()
+		}
+	}
+
+	return unmarked
+}
+
 // paint is what one cell of the map is drawn as: its region, and whether it
-// is highlighted.
+// is highlighted, and how.
 type paint struct {
-	kind        pgpage.RegionKind
-	highlighted bool
+	kind pgpage.RegionKind
+	mark mark
 }
 
 // swatch returns n cells painted the same way, as the map draws them.
@@ -103,8 +146,8 @@ func swatch(p paint, n int) string {
 	if lipgloss.ColorProfile() == termenv.Ascii {
 		// Without color the glyphs alone tell the regions apart, and an
 		// underline would only add noise to a plain text capture.
-		if p.highlighted {
-			return strings.Repeat(highlightGlyph, n)
+		if p.mark != unmarked {
+			return strings.Repeat(markGlyph[p.mark], n)
 		}
 
 		return strings.Repeat(regionGlyph[p.kind], n)
@@ -137,12 +180,12 @@ func swatch(p paint, n int) string {
 // That is how it looks without color; with color every cell is a cellGlyph
 // over the background of its region.
 func pageMap(summary pgpage.PageSummary, cached bool, width int) string {
-	return pageMapWith(summary, cached, width, highlight{})
+	return pageMapWith(summary, cached, width, nil)
 }
 
-// pageMapWith is pageMap with a range of bytes highlighted, and named in the
+// pageMapWith is pageMap with ranges of bytes highlighted, and named in the
 // legend.
-func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highlight) string {
+func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highlights) string {
 	if !cached {
 		return moreStyle.Render("reading…")
 	}
@@ -175,12 +218,12 @@ func pageMapWith(summary pgpage.PageSummary, cached bool, width int, hl highligh
 
 // mapRow draws one row of the grid: cells cells covering the bytesPerRow
 // bytes that start at row*bytesPerRow, with the cells hl covers highlighted.
-func mapRow(regions []pgpage.Region, row, cells int, hl highlight) string {
+func mapRow(regions []pgpage.Region, row, cells int, hl highlights) string {
 	return stripRow(regions, row*bytesPerRow, bytesPerRow, cells, hl)
 }
 
 // stripRow draws cells cells covering the span bytes that start at base.
-func stripRow(regions []pgpage.Region, base, span, cells int, hl highlight) string {
+func stripRow(regions []pgpage.Region, base, span, cells int, hl highlights) string {
 	var (
 		b   strings.Builder
 		cur paint
@@ -253,9 +296,9 @@ type cell struct {
 //
 // Without color there is no way to draw half a glyph, and the cell takes the
 // region that owns most of its bytes, as before.
-func splitCell(regions []pgpage.Region, hl highlight, start, end int) cell {
+func splitCell(regions []pgpage.Region, hl highlights, start, end int) cell {
 	if lipgloss.ColorProfile() == termenv.Ascii {
-		p := paint{kind: cellRegion(regions, start, end), highlighted: hl.covers(start, end)}
+		p := paint{kind: cellRegion(regions, start, end), mark: hl.markIn(start, end)}
 
 		return cell{left: p, right: p, eighths: eighths}
 	}
@@ -280,8 +323,8 @@ func splitCell(regions []pgpage.Region, hl highlight, start, end int) cell {
 }
 
 // paintAt returns how byte b of the page is painted.
-func paintAt(regions []pgpage.Region, hl highlight, b int) paint {
-	p := paint{highlighted: hl.covers(b, b+1)}
+func paintAt(regions []pgpage.Region, hl highlights, b int) paint {
+	p := paint{mark: hl.markIn(b, b+1)}
 
 	for _, region := range regions {
 		if region.Start <= b && b < region.End {
@@ -295,8 +338,11 @@ func paintAt(regions []pgpage.Region, hl highlight, b int) paint {
 
 // colorsOf returns the colors a paint is drawn with.
 func colorsOf(p paint) regionColors {
-	if p.highlighted {
-		return highlightColors
+	switch p.mark {
+	case markSelected:
+		return selectedColors
+	case markPointed:
+		return pointedColors
 	}
 
 	return regionPalette[p.kind]
@@ -374,17 +420,19 @@ type legendRow struct {
 	start, end int // bytes, end excluded
 }
 
-// legend names every region that has bytes, and the highlight if there is
-// one, as a table: the names, the ranges and the sizes each in a column of
+// legend names every region that has bytes, and the highlights, as a table: the names, the ranges and the sizes each in a column of
 // their own, the same width in every entry, so that the entries line up
 // however many columns of them fit in width.
 //
 //	█ Header        0-23      24 B    ╱ Line ptrs    24-763    740 B
 //	╎ Free        764-2471  1708 B    ╲ Tuples     2472-8191  5720 B
 //
-// The regions come in page order, row by row. The highlight gets a line of
-// its own below them: it is a part of one region, not a region.
-func legend(regions []pgpage.Region, hl highlight, width int) string {
+// The regions come in page order, row by row. Each highlight gets a line of
+// its own below them: it is a part of a region, not a region.
+//
+//	▓ line ptr #2    28-31        4 B
+//	▒ tuple (2,2)  8152-8188     37 B
+func legend(regions []pgpage.Region, hl highlights, width int) string {
 	const gap = 4 // between columns of entries
 
 	var rows []legendRow
@@ -395,14 +443,18 @@ func legend(regions []pgpage.Region, hl highlight, width int) string {
 		}
 	}
 
-	if hl.start < hl.end {
-		rows = append(rows, legendRow{swatch(paint{highlighted: true}, 1), hl.label, hl.start, hl.end})
+	regionRows := len(rows)
+
+	for _, h := range hl {
+		if h.start < h.end {
+			rows = append(rows, legendRow{swatch(paint{mark: h.mark()}, 1), h.label, h.start, h.end})
+		}
 	}
 
-	entries := renderLegend(rows)
-	if hl.start < hl.end {
-		entries = entries[:len(entries)-1]
-	}
+	// All the rows are measured together, so the highlights line up with
+	// the regions, but only the regions are laid out in columns.
+	all := renderLegend(rows)
+	entries := all[:regionRows]
 
 	entryWidth := maxWidth(entries)
 	columns := max((width+gap)/(entryWidth+gap), 1)
@@ -421,8 +473,8 @@ func legend(regions []pgpage.Region, hl highlight, width int) string {
 		b.WriteString(entry)
 	}
 
-	if hl.start < hl.end {
-		b.WriteString("\n" + renderLegend(rows)[len(rows)-1])
+	for _, entry := range all[regionRows:] {
+		b.WriteString("\n" + entry)
 	}
 
 	return b.String()

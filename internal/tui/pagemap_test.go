@@ -358,13 +358,13 @@ func TestPageMapCellsAreUnderlined(t *testing.T) {
 // legend names it.
 func TestPageMapHighlight(t *testing.T) {
 	summary := pgpage.SummarizePage(fixturePage(t, 0), 0)
-	hl := highlight{start: 8152, end: 8187, label: "item #1"}
+	hl := highlights{{start: 8152, end: 8187, label: "tuple (0,1)"}}
 
 	m := pageMapWith(summary, true, 71, hl) // 64 cells: 8 bytes each
 	rows := mapLines(t, m)
 
 	for i, row := range rows {
-		has := strings.Contains(row, highlightGlyph)
+		has := strings.Contains(row, markGlyph[markSelected])
 
 		// 8152 falls in the last row, 7680-8191.
 		if want := i == mapRows-1; has != want {
@@ -373,15 +373,15 @@ func TestPageMapHighlight(t *testing.T) {
 	}
 
 	// 35 bytes starting mid-cell touch 5 cells of 8 bytes.
-	if n := strings.Count(rows[mapRows-1], highlightGlyph); n != 5 {
+	if n := strings.Count(rows[mapRows-1], markGlyph[markSelected]); n != 5 {
 		t.Errorf("%d highlighted cells, want 5:\n%s", n, rows[mapRows-1])
 	}
 
-	if !strings.Contains(flatText(m), "item #1 8152-8186 35 B") {
+	if !strings.Contains(flatText(m), "tuple (0,1) 8152-8186 35 B") {
 		t.Errorf("the legend does not name the highlight:\n%s", m)
 	}
 
-	if plain := pageMap(summary, true, 71); strings.Contains(plain, highlightGlyph) {
+	if plain := pageMap(summary, true, 71); strings.Contains(plain, markGlyph[markSelected]) {
 		t.Errorf("the map highlights bytes nobody asked for:\n%s", plain)
 	}
 }
@@ -453,7 +453,7 @@ func TestSplitCell(t *testing.T) {
 	withColor(t)
 
 	rs := regions(764, 2472, 8192)
-	hl := highlight{start: 8152, end: 8189}
+	hl := highlights{{start: 8152, end: 8189}}
 
 	header, pointers := paint{kind: pgpage.RegionHeader}, paint{kind: pgpage.RegionLinePointers}
 
@@ -472,16 +472,16 @@ func TestSplitCell(t *testing.T) {
 		},
 		{
 			name: "the highlight starts", start: 8144, end: 8160,
-			want: cell{paint{kind: pgpage.RegionTuples}, paint{kind: pgpage.RegionTuples, highlighted: true}, 4},
+			want: cell{paint{kind: pgpage.RegionTuples}, paint{kind: pgpage.RegionTuples, mark: markSelected}, 4},
 		},
 		{
 			// 13 of 16 bytes are 6.5 eighths, rounded up.
 			name: "rounded to the nearest eighth", start: 8176, end: 8192,
-			want: cell{paint{kind: pgpage.RegionTuples, highlighted: true}, paint{kind: pgpage.RegionTuples}, 7},
+			want: cell{paint{kind: pgpage.RegionTuples, mark: markSelected}, paint{kind: pgpage.RegionTuples}, 7},
 		},
 		{
 			name: "the highlight ends", start: 8160, end: 8192,
-			want: cell{paint{kind: pgpage.RegionTuples, highlighted: true}, paint{kind: pgpage.RegionTuples}, 7},
+			want: cell{paint{kind: pgpage.RegionTuples, mark: markSelected}, paint{kind: pgpage.RegionTuples}, 7},
 		},
 	}
 
@@ -493,7 +493,7 @@ func TestSplitCell(t *testing.T) {
 
 	// A single byte is a quarter of an eighth of a 32-byte cell, which rounds
 	// to nothing; it is drawn as one eighth, so that it does not vanish.
-	tiny := highlight{start: 1000, end: 1001}
+	tiny := highlights{{start: 1000, end: 1001}}
 	if got := splitCell(rs, tiny, 1000, 1032); got.eighths != 1 {
 		t.Errorf("one highlighted byte fills %d eighths of its cell, want 1", got.eighths)
 	}
@@ -517,7 +517,7 @@ func TestPageMapAddsUp(t *testing.T) {
 			for row := range mapRows {
 				for i := range cells {
 					start := row*bytesPerRow + i*perCell
-					c := splitCell(rs, highlight{}, start, start+perCell)
+					c := splitCell(rs, nil, start, start+perCell)
 
 					drawn[c.left.kind] += c.eighths * perCell / eighths
 					drawn[c.right.kind] += (eighths - c.eighths) * perCell / eighths
@@ -569,7 +569,7 @@ func TestPageMapSplitCellColors(t *testing.T) {
 // dashes of the ranges and the units of the sizes of every entry are in the
 // same columns, and the highlight, below the regions, lines up with them.
 func TestPageMapLegendIsATable(t *testing.T) {
-	hl := highlight{start: 8152, end: 8189, label: "item #2"}
+	hl := highlights{{start: 28, end: 32, label: "line ptr #2"}, {start: 8152, end: 8189, label: "tuple (2,2)", pointed: true}}
 
 	for _, block := range []pgpage.BlockNumber{0, 2} {
 		summary := pgpage.SummarizePage(fixturePage(t, block), block)
@@ -584,8 +584,8 @@ func TestPageMapLegendIsATable(t *testing.T) {
 				entries = append(entries, splitEntries(line)...)
 			}
 
-			if len(entries) != 5 {
-				t.Fatalf("block %d, width %d: %d entries, want 4 regions and the highlight:\n%s",
+			if len(entries) != 6 {
+				t.Fatalf("block %d, width %d: %d entries, want 4 regions and 2 highlights:\n%s",
 					block, width, len(entries), strings.Join(lines, "\n"))
 			}
 
@@ -616,4 +616,26 @@ func splitEntries(line string) []string {
 	}
 
 	return entries
+}
+
+// With color, what was selected and what it points to are two shades of the
+// selection color: the entry in the light one, the tuple in the dark one.
+func TestPageMapTwoShades(t *testing.T) {
+	withColor(t)
+
+	hl := highlights{
+		{start: 28, end: 32, label: "line ptr #2"},
+		{start: 8152, end: 8189, label: "tuple (2,2)", pointed: true},
+	}
+	rows := mapLines(t, pageMapWith(pgpage.SummarizePage(fixturePage(t, 2), 2), true, offsetLabel+64, hl))
+
+	light, dark := "48;5;"+string(selectedColors.background), "48;5;"+string(pointedColors.background)
+
+	if !strings.Contains(rows[0], light) || strings.Contains(rows[0], dark) {
+		t.Errorf("the entry is not in the light shade alone:\n%q", rows[0])
+	}
+
+	if !strings.Contains(rows[mapRows-1], dark) || strings.Contains(rows[mapRows-1], light) {
+		t.Errorf("the tuple is not in the dark shade alone:\n%q", rows[mapRows-1])
+	}
 }

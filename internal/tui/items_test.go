@@ -184,32 +184,47 @@ func TestItemPanelInvalid(t *testing.T) {
 	}
 }
 
-// Only a line pointer with a tuple highlights bytes on the map.
-func TestItemHighlight(t *testing.T) {
+// A line pointer highlights its 4-byte entry, and the tuple it points to if
+// it has one. A redirect says where it leads instead, and a line pointer that
+// fails its checks highlights only its entry, whose place is always known.
+func TestItemHighlights(t *testing.T) {
 	it := fixtureItems(t, 2)
+
+	entry := func(n int, label string) highlight {
+		start := pgpage.PageHeaderSize + (n-1)*4
+		return highlight{start: start, end: start + 4, label: label}
+	}
 
 	tests := []struct {
 		name     string
 		selected int
-		want     highlight
+		want     highlights
 	}{
-		{name: "normal", selected: 1, want: highlight{start: 8152, end: 8189, label: "tuple (2,2)"}},
-		{name: "dead", selected: 0},
-		{name: "redirect", selected: 9},
+		{name: "normal", selected: 1, want: highlights{
+			entry(2, "line ptr #2"),
+			{start: 8152, end: 8189, label: "tuple (2,2)", pointed: true},
+		}},
+		{name: "dead", selected: 0, want: highlights{entry(1, "line ptr #1")}},
+		{name: "redirect", selected: 9, want: highlights{entry(10, "line ptr #10 → #168")}},
 	}
 
 	for _, tt := range tests {
 		it.selected = tt.selected
 
-		if got := itemHighlight(it); got != tt.want {
-			t.Errorf("%s: highlight = %+v, want %+v", tt.name, got, tt.want)
+		if got := itemHighlights(it); fmt.Sprint(got) != fmt.Sprint(tt.want) {
+			t.Errorf("%s: highlights = %+v, want %+v", tt.name, got, tt.want)
 		}
 	}
 
 	broken := fixtureItems(t, 0)
 	broken.ids[0] |= 1
 
-	if got := itemHighlight(broken); got != (highlight{}) {
-		t.Errorf("a line pointer that fails its checks highlights %+v", got)
+	if got := itemHighlights(broken); len(got) != 1 || got[0].pointed {
+		t.Errorf("a line pointer that fails its checks highlights %+v, want its entry only", got)
+	}
+
+	it.selected = 1
+	if got := tupleFirst(itemHighlights(it)); !got[0].pointed || got[1].pointed {
+		t.Errorf("tupleFirst = %+v, want the tuple first with the colors unchanged", got)
 	}
 }
