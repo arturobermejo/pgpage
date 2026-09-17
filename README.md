@@ -14,6 +14,10 @@ uses it for.
 It never writes to the file. It reads the file as it is on disk, so pages
 that are only dirty in shared buffers are not seen until a checkpoint.
 
+> **Early stage.** Commands and the Go API may change before 1.0, and what
+> it shows may be wrong: check anything surprising against `pageinspect`.
+> It is read-only, so trying it on real data is safe.
+
 ![pgpage exploring a heap relation: the page list, the map of page 0 and its decoded header](assets/pgpage.png)
 
 ## Install
